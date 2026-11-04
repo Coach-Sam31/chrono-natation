@@ -261,7 +261,8 @@ function dep(id, r) { return S.T0 + r * cycleMs() + (S.order[id][r] - 1) * S.cfg
 function pending(id) { return S.res[id].findIndex(x => !x); }
 function expected(id, p) {
   const prev = S.res[id].slice(0, p).reverse().find(x => x && x.st === 'ok');
-  const est = prev ? prev.t : (S.cfg.cible || S.cfg.cycle * 0.75);
+  const cible = (S.cfg.cibles && S.cfg.cibles[id]) || S.cfg.cible;
+  const est = prev ? prev.t : (cible || S.cfg.cycle * 0.75);
   return dep(id, p) + est * 1000;
 }
 function laneLabel(l) { return (S.cfg.laneNums && S.cfg.laneNums[l]) || l + 1; }
@@ -318,7 +319,12 @@ function startPlanned(id, viewChoice) {
   const sp = seriesPretes().find(x => x.id === id); if (!sp) return;
   const f = sp.f, nag = Object.fromEntries((PLAN.nageurs || []).map(n => [String(n.id_nageur), n]));
   const laneNums = [...new Set(sp.rows.map(r => +r.ligne))].sort((a, b) => a - b);
-  const lanes = laneNums.map(L => sp.rows.filter(r => +r.ligne === L).sort((a, b) => a.ordre - b.ordre).map(r => String(r.id_nageur)));
+  // Cible de chaque nageur : celle tapée à la main, sinon celle calculée depuis ses allures (colonne cible_auto_s)
+  const cibleDe = r => +r.temps_cible_s || +r.cible_auto_s || null;
+  const cibles = Object.fromEntries(sp.rows.map(r => [String(r.id_nageur), cibleDe(r)]));
+  // Ordre de départ : celui du Sheet ; sinon du plus rapide au plus lent selon les cibles
+  const rang = r => (+r.ordre ? +r.ordre : 1000 + (cibleDe(r) || 999));
+  const lanes = laneNums.map(L => sp.rows.filter(r => +r.ligne === L).sort((a, b) => rang(a) - rang(b)).map(r => String(r.id_nageur)));
   const names = {}, info = {};
   lanes.flat().forEach(i => {
     const n = nag[i] || { nom: i, prenom: '' };
@@ -330,7 +336,7 @@ function startPlanned(id, viewChoice) {
   buildSeries({
     distance: +f.distance, nbRep, cycle: +f.cycle_s, vague: +f.vague_s, bassin: +f.bassin_m || 25, countReps,
     lanes: lanes.length, perLane: Math.max(...lanes.map(l => l.length)), view: viewChoice,
-    nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cible: +f.temps_cible_s || null, laneNums
+    nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cibles, laneNums
   }, lanes, names, info);
 }
 
