@@ -88,6 +88,10 @@ button { cursor: pointer; touch-action: manipulation; }
 .hist { display: flex; flex-direction: column; gap: 8px; }
 .hist-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; text-align: left; border: 2px solid var(--line); background: var(--surface); border-radius: 10px; padding: 12px 14px; min-height: 52px; }
 .hist-item span { color: var(--muted); font-size: 14px; }
+details.essai { border: 2px dashed var(--line); border-radius: 10px; padding: 10px 14px; }
+details.essai summary { font-family: var(--font-display); font-weight: 700; font-size: 22px; cursor: pointer; min-height: 40px; line-height: 40px; }
+details.essai > * + * { margin-top: 12px; }
+.tag-essai { background: var(--warn); color: #fff; font-weight: 600; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; border-radius: 6px; padding: 4px 8px; }
 .tile {
   position: relative; border: 3px solid var(--line); background: var(--surface); border-radius: 12px;
   padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; min-height: 0;
@@ -447,14 +451,17 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 function renderSetup() {
   const live = load();
   const saved = live && live.T0 != null;
-  const c = Object.assign({ distance: 100, nbRep: 8, cycle: 100, vague: 10, lanes: 3, perLane: 4, view: 'cote-haut', bassin: 25 }, (live || HIST[0] || {}).cfg);
+  // Le formulaire d'essai ne reprend que les réglages d'un essai précédent, jamais ceux d'une vraie série (sinon on les confond).
+  const lastEssai = [live, ...HIST].find(h => h && h.cfg.essai);
+  const c = Object.assign({ distance: 100, nbRep: 8, cycle: 100, vague: 10, lanes: 3, perLane: 4, bassin: 25 }, lastEssai ? lastEssai.cfg : {});
+  c.view = ((live || HIST[0] || {}).cfg || {}).view || 'cote-haut';
   const cbDefault = c.countReps ? c.countReps.join(';') : [...new Set([1, Math.ceil(c.nbRep / 2), c.nbRep])].join(';');
   const VIEWS = [['cote-haut', 'Côté du bassin · ligne 1 en haut'], ['cote-bas', 'Côté du bassin · ligne 1 en bas'], ['bout-gauche', 'Bout du bassin · ligne 1 à gauche'], ['bout-droite', 'Bout du bassin · ligne 1 à droite']];
   const secret = getLS(KEY_SECRET), sp = seriesPretes(), pend = aEnvoyer();
   $('#app').innerHTML = `
   <div class="view"><div class="scroll"><div class="panel">
     <h1>Chrono multi-nageurs</h1>
-    ${saved ? `<div class="actions"><button class="btn go big" id="resume">Reprendre la série en cours</button></div>` : ''}
+    ${saved ? `<div class="actions"><button class="btn go big" id="resume">Reprendre : ${live.cfg.essai ? 'essai (nageurs fictifs)' : esc(live.cfg.groupe)} · ${live.cfg.nbRep} × ${live.cfg.distance}</button></div>` : ''}
     <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
 
     <h2>Séries prêtes</h2>
@@ -468,8 +475,8 @@ function renderSetup() {
 
     ${pend.length ? `<h2>À envoyer</h2><div class="actions"><button class="btn go big" id="send-all">Envoyer au Sheet (${pend.length} série${pend.length > 1 ? 's' : ''})</button></div>` : ''}
 
-    <h2>Série d'essai</h2>
-    <p class="note">Nageurs fictifs, pour s'entraîner. Jamais envoyée au Sheet.</p>
+    <details class="essai"><summary>Série d'essai (nageurs fictifs)</summary>
+    <p class="note">Pour s'entraîner. Jamais envoyée au Sheet.</p>
     <div class="form">
       <div class="field"><label for="f-dist">Distance (m)</label><input id="f-dist" type="number" inputmode="numeric" value="${c.distance}"></div>
       <div class="field"><label for="f-rep">Répétitions</label><input id="f-rep" type="number" inputmode="numeric" min="1" max="30" value="${c.nbRep}"></div>
@@ -485,6 +492,7 @@ function renderSetup() {
     <p class="note">Coups de bras comptés longueur par longueur sur les répétitions indiquées, par exemple <b>1;4;8</b>. Laisse vide pour ne pas compter.</p>
     <p class="note">Exemple de départ : 1'40 s'écrit <b>1:40</b>.</p>
     <div class="actions"><button class="btn go" id="start">Préparer la série d'essai</button></div>
+    </details>
     ${saved ? `<p class="note">Démarrer une autre série abandonne la série en cours.</p>` : ''}
     <h2>Historique</h2>
     ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.essai ? 'Essai' : esc(h.cfg.groupe)} · ${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)} · ${h.cfg.essai ? 'essai' : h.sentAt ? 'envoyée ✓' : 'à envoyer'}</span></button>`).join('')}</div>`
@@ -529,6 +537,7 @@ function renderChrono() {
     <div class="bar">
       <div class="clock num" id="clock">00:00</div>
       <div class="rep num" id="rep"></div>
+      ${S.cfg.essai ? '<span class="tag-essai">Essai · nageurs fictifs</span>' : ''}
       <div class="spacer"></div>
       ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button><button class="btn" id="home">Accueil</button>` : `<button class="btn danger" id="end">Terminer</button>`}
       <button class="btn undo" id="undo">↶ Annuler</button>
