@@ -248,25 +248,109 @@ function dep(id, r) { return S.T0 + r * cycleMs() + (S.order[id][r] - 1) * S.cfg
 function pending(id) { return S.res[id].findIndex(x => !x); }
 function expected(id, p) {
   const prev = S.res[id].slice(0, p).reverse().find(x => x && x.st === 'ok');
-  const est = prev ? prev.t : S.cfg.cycle * 0.75;
+  const est = prev ? prev.t : (S.cfg.cible || S.cfg.cycle * 0.75);
   return dep(id, p) + est * 1000;
 }
+function laneLabel(l) { return (S.cfg.laneNums && S.cfg.laneNums[l]) || l + 1; }
 
+// Série d'essai : nageurs fictifs, jamais envoyée au Sheet
 function newSeries(cfg) {
-  const lanes = [], order = {}, res = {}, names = {};
+  const lanes = [], names = {};
   let k = 0;
   for (let l = 0; l < cfg.lanes; l++) {
     const ids = [];
-    for (let i = 0; i < cfg.perLane; i++) {
-      const id = 's' + k; names[id] = NAMES[k++]; ids.push(id);
-      order[id] = Array(cfg.nbRep).fill(i + 1);
-      res[id] = Array(cfg.nbRep).fill(null);
-    }
+    for (let i = 0; i < cfg.perLane; i++) { const id = 's' + k; names[id] = NAMES[k++]; ids.push(id); }
     lanes.push(ids);
   }
-  S = { uid: Date.now(), cfg, names, lanes, laneOrder: lanes.map(l => [...l]), queue: lanes.map(l => [...l]), order, res, T0: null };
+  buildSeries(Object.assign({ essai: true }, cfg), lanes, names, {});
+}
+function buildSeries(cfg, lanes, names, info) {
+  const order = {}, res = {};
+  lanes.forEach(ids => ids.forEach((id, i) => { order[id] = Array(cfg.nbRep).fill(i + 1); res[id] = Array(cfg.nbRep).fill(null); }));
+  S = { uid: Date.now(), cfg, names, info, lanes, laneOrder: lanes.map(l => [...l]), queue: lanes.map(l => [...l]), order, res, T0: null };
   syncDisplay(); undoStack = []; save();
 }
+
+// ---------- Lien avec le Google Sheet (Apps Script) ----------
+// L'adresse est publique ; sans le code secret (gardé sur l'appareil), le script refuse tout.
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzYb6vBHxEX3fqJYsXS-O1LqGJdQ5pi4gbaZvVz83nR57c6B7zoIBus3Uf--8si9rnlEw/exec';
+const KEY_SECRET = 'chrono-secret', KEY_PLAN = 'chrono-plan';
+function getLS(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function setLS(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+let PLAN = (() => { try { return JSON.parse(getLS(KEY_PLAN)); } catch (e) { return null; } })(); // { nageurs, series, loadedAt }
+
+async function callSheet(body) {
+  const secret = getLS(KEY_SECRET);
+  if (!secret) throw new Error('Code secret non enregistré sur cet appareil');
+  let rep;
+  try { rep = await fetch(SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({}, body, { secret })) }); }
+  catch (e) { throw new Error('Pas de réseau : réessaie quand le wifi revient'); }
+  let data; try { data = await rep.json(); } catch (e) { throw new Error('Réponse du Sheet illisible'); }
+  if (!data.ok) throw new Error(data.erreur || 'Réponse du Sheet inattendue');
+  return data;
+}
+async function chargerSheet() {
+  const d = await callSheet({ action: 'charger' });
+  PLAN = { nageurs: d.nageurs, series: d.series, loadedAt: Date.now() };
+  setLS(KEY_PLAN, JSON.stringify(PLAN));
+}
+function seriesPretes() {
+  if (!PLAN) return [];
+  const par = {};
+  PLAN.series.forEach(r => { const k = String(r.id_serie); (par[k] = par[k] || []).push(r); });
+  return Object.entries(par).map(([id, rows]) => ({ id, rows, f: rows[0] }));
+}
+function fmtJour(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? String(v) : d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }); }
+function startPlanned(id, viewChoice) {
+  const sp = seriesPretes().find(x => x.id === id); if (!sp) return;
+  const f = sp.f, nag = Object.fromEntries((PLAN.nageurs || []).map(n => [String(n.id_nageur), n]));
+  const laneNums = [...new Set(sp.rows.map(r => +r.ligne))].sort((a, b) => a - b);
+  const lanes = laneNums.map(L => sp.rows.filter(r => +r.ligne === L).sort((a, b) => a.ordre - b.ordre).map(r => String(r.id_nageur)));
+  const names = {}, info = {};
+  lanes.flat().forEach(i => {
+    const n = nag[i] || { nom: i, prenom: '' };
+    info[i] = { nom: String(n.nom), prenom: String(n.prenom) };
+    names[i] = n.prenom ? `${n.prenom} ${String(n.nom).charAt(0)}.` : String(n.nom);
+  });
+  const nbRep = +f.nb_rep;
+  const countReps = [...new Set(String(f.reps_comptage || '').split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= nbRep))].sort((a, b) => a - b);
+  buildSeries({
+    distance: +f.distance, nbRep, cycle: +f.cycle_s, vague: +f.vague_s, bassin: +f.bassin_m || 25, countReps,
+    lanes: lanes.length, perLane: Math.max(...lanes.map(l => l.length)), view: viewChoice,
+    nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cible: +f.temps_cible_s || null, laneNums
+  }, lanes, names, info);
+}
+
+// Une ligne par répétition et par nageur (format de l'onglet Resultats)
+function appareil() { const ua = navigator.userAgent; return /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'iPad' : /iPhone/.test(ua) ? 'iPhone' : 'autre'; }
+function lignesSheet(s) {
+  const prev = S; S = s;
+  const d = new Date(s.T0), date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const c = s.cfg, rows = [];
+  s.lanes.forEach((ids, l) => ids.forEach(id => s.res[id].forEach((x, r) => {
+    const cb = cbOf(id, r);
+    rows.push({
+      date, groupe: c.groupe, id_serie: c.idSerie, distance: c.distance, nage: c.nage, bassin_m: c.bassin, nb_rep: c.nbRep,
+      cycle_s: c.cycle, vague_s: c.vague, ligne: laneLabel(l), ordre: s.order[id][r], id_nageur: id,
+      nom: s.info[id].nom, prenom: s.info[id].prenom, rep: r + 1,
+      temps_s: x && x.st === 'ok' ? Math.round(x.t * 100) / 100 : '', coups_bras: cb ? cb.map(v => v ?? '').join(';') : '',
+      rpe: rpeOf(id) ?? '', statut: x ? x.st : 'manque', appareil: appareil()
+    });
+  })));
+  S = prev; return rows;
+}
+function aEnvoyer() { return HIST.filter(h => !h.cfg.essai && !h.sentAt); }
+function saveHist() { try { localStorage.setItem(KEY_HIST, JSON.stringify(HIST)); } catch (e) {} }
+async function envoyer(liste) {
+  let n = 0;
+  for (const s of liste) {
+    await callSheet({ action: 'envoyer', lignes: lignesSheet(s) });
+    s.sentAt = Date.now(); n++; saveHist();
+  }
+  return n;
+}
+// Une correction après envoi : la série repasse « à envoyer » (le renvoi remplace ses lignes dans le Sheet)
+function touched() { if (S && S.done && S.sentAt) S.sentAt = null; }
 
 // ---------- Coups de bras : un chiffre par longueur, sur les répétitions comptées ----------
 // Hors de la pile Annuler : « Annuler » ne défait que les taps chrono.
@@ -275,7 +359,7 @@ function isCounted(r) { return (S.cfg.countReps || []).includes(r + 1); }
 function cbOf(id, r) { return (S.cb && S.cb[id] && S.cb[id][r]) || null; }
 function setCb(id, r, arr) {
   S.cb = S.cb || {}; S.cb[id] = S.cb[id] || Array(nb()).fill(null);
-  S.cb[id][r] = arr.some(v => v != null) ? arr : null; save();
+  S.cb[id][r] = arr.some(v => v != null) ? arr : null; touched(); save();
 }
 function cbComplete(id, r) { const a = cbOf(id, r); return !!a && a.length === nLen() && a.every(v => v != null); }
 function cbText(a) { return a ? a.map(v => v == null ? '?' : v).join('·') : ''; }
@@ -340,7 +424,7 @@ function finishSeries(manual) {
   try { if (wakeLock) wakeLock.release(); } catch (e) {}
   closeLayer(); view = 'recap'; render(); toast("Série terminée · rangée dans l'historique");
 }
-function setResult(id, r, val) { pushUndo(); S.res[id][r] = val; save(); }
+function setResult(id, r, val) { pushUndo(); S.res[id][r] = val; touched(); save(); }
 function nextCycle() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
 function moveInOrder(id, dir) {
   const l = laneOf(id), arr = S.laneOrder[l], i = arr.indexOf(id), j = i + dir;
@@ -366,12 +450,26 @@ function renderSetup() {
   const c = Object.assign({ distance: 100, nbRep: 8, cycle: 100, vague: 10, lanes: 3, perLane: 4, view: 'cote-haut', bassin: 25 }, (live || HIST[0] || {}).cfg);
   const cbDefault = c.countReps ? c.countReps.join(';') : [...new Set([1, Math.ceil(c.nbRep / 2), c.nbRep])].join(';');
   const VIEWS = [['cote-haut', 'Côté du bassin · ligne 1 en haut'], ['cote-bas', 'Côté du bassin · ligne 1 en bas'], ['bout-gauche', 'Bout du bassin · ligne 1 à gauche'], ['bout-droite', 'Bout du bassin · ligne 1 à droite']];
+  const secret = getLS(KEY_SECRET), sp = seriesPretes(), pend = aEnvoyer();
   $('#app').innerHTML = `
   <div class="view"><div class="scroll"><div class="panel">
     <h1>Chrono multi-nageurs</h1>
-    <p class="note">Maquette d'essai (étape 1.1). Les nageurs sont fictifs. Rien n'est envoyé : tout reste sur cet appareil.</p>
     ${saved ? `<div class="actions"><button class="btn go big" id="resume">Reprendre la série en cours</button></div>` : ''}
-    <h2>Série</h2>
+    <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+
+    <h2>Séries prêtes</h2>
+    ${secret ? `
+      <div class="actions"><button class="btn" id="load">Charger depuis le Sheet</button></div>
+      <p class="note">${PLAN ? `Chargé le ${fmtDate(PLAN.loadedAt)} · ${(PLAN.nageurs || []).length} nageurs.` : 'Charge les séries avec du réseau (la veille ou au vestiaire).'}</p>
+      ${sp.length ? `<div class="hist">${sp.map(x => `<button class="hist-item plan-item" data-id="${esc(x.id)}"><b>${esc(x.f.groupe)} · ${x.f.nb_rep} × ${x.f.distance} ${esc(x.f.nage || '')} · départ ${fmtCycle(+x.f.cycle_s)} · vagues ${x.f.vague_s}" · ${x.rows.length} nageurs</b><span>${fmtJour(x.f.date_prevue)}</span></button>`).join('')}</div>`
+        : PLAN ? '<p class="note">Aucune série dans l\'onglet Series_pretes.</p>' : ''}`
+    : `<p class="note">Code secret du Sheet, à saisir une seule fois sur cet appareil.</p>
+      <div class="actions"><input id="f-secret" type="password" autocomplete="off" style="border:2px solid var(--line);border-radius:8px;padding:10px;min-height:48px;-webkit-user-select:text;user-select:text" aria-label="Code secret"><button class="btn go" id="save-secret">Enregistrer</button></div>`}
+
+    ${pend.length ? `<h2>À envoyer</h2><div class="actions"><button class="btn go big" id="send-all">Envoyer au Sheet (${pend.length} série${pend.length > 1 ? 's' : ''})</button></div>` : ''}
+
+    <h2>Série d'essai</h2>
+    <p class="note">Nageurs fictifs, pour s'entraîner. Jamais envoyée au Sheet.</p>
     <div class="form">
       <div class="field"><label for="f-dist">Distance (m)</label><input id="f-dist" type="number" inputmode="numeric" value="${c.distance}"></div>
       <div class="field"><label for="f-rep">Répétitions</label><input id="f-rep" type="number" inputmode="numeric" min="1" max="30" value="${c.nbRep}"></div>
@@ -385,22 +483,39 @@ function renderSetup() {
       <div class="field"><label for="f-cb">Rép. avec coups de bras</label><input id="f-cb" type="text" inputmode="numeric" value="${cbDefault}"></div>
     </div>
     <p class="note">Coups de bras comptés longueur par longueur sur les répétitions indiquées, par exemple <b>1;4;8</b>. Laisse vide pour ne pas compter.</p>
-    <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <p class="note">Exemple de départ : 1'40 s'écrit <b>1:40</b>.</p>
-    <div class="actions"><button class="btn go big" id="start">${saved ? 'Nouvelle série' : 'Préparer la série'}</button></div>
-    ${saved ? `<p class="note">« Nouvelle série » abandonne la série en cours.</p>` : ''}
+    <div class="actions"><button class="btn go" id="start">Préparer la série d'essai</button></div>
+    ${saved ? `<p class="note">Démarrer une autre série abandonne la série en cours.</p>` : ''}
     <h2>Historique</h2>
-    ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)}</span></button>`).join('')}</div>`
+    ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.essai ? 'Essai' : esc(h.cfg.groupe)} · ${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)} · ${h.cfg.essai ? 'essai' : h.sentAt ? 'envoyée ✓' : 'à envoyer'}</span></button>`).join('')}</div>`
       : `<p class="note">Les séries terminées arrivent ici. Tu pourras encore y corriger les temps.</p>`}
   </div></div></div>`;
+  const viewNow = () => $('#f-view').value;
   if (saved) $('#resume').onclick = () => { S = live; syncDisplay(); undoStack = []; view = 'chrono'; keepAwake(); render(); };
-  $('#app').querySelectorAll('.hist-item').forEach(b => b.onclick = () => { S = HIST[+b.dataset.i]; view = 'recap'; render(); });
+  $('#app').querySelectorAll('.hist-item[data-i]').forEach(b => b.onclick = () => { S = HIST[+b.dataset.i]; view = 'recap'; render(); });
+  $('#app').querySelectorAll('.plan-item').forEach(b => b.onclick = () => { startPlanned(b.dataset.id, viewNow()); view = 'chrono'; render(); });
+  if ($('#save-secret')) $('#save-secret').onclick = () => {
+    const v = $('#f-secret').value.trim(); if (!v) { toast('Saisis le code secret du Sheet'); return; }
+    setLS(KEY_SECRET, v); render(); toast('Code secret enregistré sur cet appareil');
+  };
+  if ($('#load')) $('#load').onclick = async () => {
+    const b = $('#load'); b.disabled = true; b.textContent = 'Chargement…';
+    try { await chargerSheet(); toast('Séries et nageurs chargés'); }
+    catch (e) { toast(e.message); if (/secret/i.test(e.message) && /refus/i.test(e.message)) setLS(KEY_SECRET, ''); }
+    render();
+  };
+  if ($('#send-all')) $('#send-all').onclick = async () => {
+    const b = $('#send-all'); b.disabled = true; b.textContent = 'Envoi…';
+    try { const n = await envoyer(aEnvoyer()); toast(`${n} série${n > 1 ? 's' : ''} envoyée${n > 1 ? 's' : ''} au Sheet`); }
+    catch (e) { toast(e.message); }
+    render();
+  };
   $('#start').onclick = () => {
     const cycle = parseTime($('#f-cyc').value);
     if (!cycle) { toast('Cycle illisible : écris par exemple 1:40'); return; }
     const nbRep = Math.max(1, Math.min(30, parseInt($('#f-rep').value, 10) || 1));
     const countReps = [...new Set($('#f-cb').value.split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= nbRep))].sort((a, b) => a - b);
-    newSeries({ distance: parseInt($('#f-dist').value, 10) || 100, nbRep, cycle, bassin: +$('#f-pool').value, countReps, vague: +$('#f-vag').value, lanes: +$('#f-lanes').value, perLane: +$('#f-per').value, view: $('#f-view').value });
+    newSeries({ distance: parseInt($('#f-dist').value, 10) || 100, nbRep, cycle, bassin: +$('#f-pool').value, countReps, vague: +$('#f-vag').value, lanes: +$('#f-lanes').value, perLane: +$('#f-per').value, view: viewNow() });
     view = 'chrono'; render();
   };
 }
@@ -487,7 +602,7 @@ function buildGrid() {
   order.forEach(l => {
     const ids = display[l];
     const lane = document.createElement('div'); lane.className = 'lane' + (bout ? ' bout' : '');
-    lane.innerHTML = `<div class="lane-tag">${bout ? 'L' : ''}${l + 1}</div><div class="tiles" style="${bout ? 'grid-template-rows' : 'grid-template-columns'}: repeat(${ids.length}, minmax(0, 1fr))"></div>`;
+    lane.innerHTML = `<div class="lane-tag">${bout ? 'L' : ''}${laneLabel(l)}</div><div class="tiles" style="${bout ? 'grid-template-rows' : 'grid-template-columns'}: repeat(${ids.length}, minmax(0, 1fr))"></div>`;
     const tiles = lane.querySelector('.tiles');
     ids.forEach(id => {
       const el = document.createElement('div'); el.className = 'tile';
@@ -566,7 +681,7 @@ function openMenu(id) {
   const orderHtml = () => S.laneOrder[l].map((sid, i) => `<span class="chip ${sid === id ? 'me' : ''}">${i + 1}. ${esc(S.names[sid])}</span>`).join('');
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Actions pour ${esc(S.names[id])}">
-    <h2>${esc(S.names[id])} · ligne ${l + 1}</h2>
+    <h2>${esc(S.names[id])} · ligne ${laneLabel(l)}</h2>
     ${p >= 0 ? `<div class="row">
       <button class="btn" id="m-miss">Manqué (rép. ${p + 1})</button>
       <button class="btn" id="m-nf">Non faite (rép. ${p + 1})</button>
@@ -646,7 +761,7 @@ function openRpe(id, seq) {
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="RPE de ${esc(S.names[id])}">
     <h2>RPE · ${esc(S.names[id])}</h2>
-    <p class="note">Ligne ${laneOf(id) + 1}${seq ? ` · nageur ${i + 1} / ${ids.length}` : ''} · 0 = repos, 10 = maximal</p>
+    <p class="note">Ligne ${laneLabel(laneOf(id))}${seq ? ` · nageur ${i + 1} / ${ids.length}` : ''} · 0 = repos, 10 = maximal</p>
     <div class="rpe-keys">${[...Array(11).keys()].map(n => `<button class="pad-key ${n === cur ? 'go' : ''}" data-n="${n}">${n}</button>`).join('')}</div>
     <div class="row">
       ${seq && i < ids.length - 1 ? `<button class="btn" id="r-skip">Passer</button>` : ''}
@@ -657,10 +772,10 @@ function openRpe(id, seq) {
   const finish = () => { closeLayer(); render(); };
   const next = () => (seq && i < ids.length - 1 ? openRpe(ids[i + 1], true) : finish());
   $('#layer').querySelectorAll('.rpe-keys button').forEach(b => b.onclick = () => {
-    S.rpe = S.rpe || {}; S.rpe[id] = +b.dataset.n; save(); next();
+    S.rpe = S.rpe || {}; S.rpe[id] = +b.dataset.n; touched(); save(); next();
   });
   if ($('#r-skip')) $('#r-skip').onclick = next;
-  if ($('#r-clear')) $('#r-clear').onclick = () => { delete S.rpe[id]; save(); finish(); };
+  if ($('#r-clear')) $('#r-clear').onclick = () => { delete S.rpe[id]; touched(); save(); finish(); };
   $('#r-close').onclick = finish;
   $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') finish(); });
 }
@@ -679,7 +794,7 @@ function renderRecap() {
   const rows = S.lanes.map((ids, l) => ids.map(id => {
     const ok = S.res[id].filter(x => x && x.st === 'ok').map(x => x.t);
     const avg = ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : null;
-    return `<tr><td><b>${esc(S.names[id])}</b> · L${l + 1}</td>${reps.map(r => {
+    return `<tr><td><b>${esc(S.names[id])}</b> · L${laneLabel(l)}</td>${reps.map(r => {
       const x = S.res[id][r], a = cbOf(id, r);
       const missing = isCounted(r) && x && x.st === 'ok' && !cbComplete(id, r);
       const cb = a ? `<div class="cbline num">${cbText(a)}</div>` : missing ? `<div class="cbline">CB à noter</div>` : '';
@@ -700,11 +815,18 @@ function renderRecap() {
     <div class="tablewrap"><table>
       <thead><tr><th>Nageur</th>${reps.map(r => `<th>Rép. ${r + 1}${isCounted(r) ? ' · CB' : ''}</th>`).join('')}<th>Moy. · CB</th><th>RPE</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-    <div class="actions"><button class="btn go big" id="rpe-all">Noter les RPE${rpeMissing() ? ` (${rpeMissing()} à noter)` : ''}</button></div>
+    <div class="actions"><button class="btn go big" id="rpe-all">Noter les RPE${rpeMissing() ? ` (${rpeMissing()} à noter)` : ''}</button>
+      ${S.done && !S.cfg.essai ? `<button class="btn big" id="send-one">${S.sentAt ? 'Renvoyer au Sheet' : 'Envoyer au Sheet'}</button>` : ''}</div>
+    ${S.done ? `<p class="note">${S.cfg.essai ? "Série d'essai : elle reste sur cet appareil." : S.sentAt ? `Envoyée au Sheet le ${fmtDate(S.sentAt)}.` : 'Pas encore envoyée au Sheet. Elle reste en attente sur cet appareil.'}</p>` : ''}
     <div class="actions">${S.done ? `<button class="btn danger" id="del">Supprimer de l'historique</button>` : `<button class="btn danger" id="end2">Terminer la série</button>`}</div>
   </div></div></div>`;
   $('#app').querySelectorAll('td.cell[data-r]').forEach(td => td.onclick = () => openFix(td.dataset.id, +td.dataset.r));
   $('#app').querySelectorAll('td.rpe-cell').forEach(td => td.onclick = () => openRpe(td.dataset.rpe, false));
+  if ($('#send-one')) $('#send-one').onclick = async () => {
+    const b = $('#send-one'); b.disabled = true; b.textContent = 'Envoi…';
+    try { await envoyer([S]); toast('Série envoyée au Sheet'); } catch (e) { toast(e.message); }
+    render();
+  };
   $('#rpe-all').onclick = () => { const ids = S.lanes.flat(); openRpe(ids.find(id => rpeOf(id) == null) || ids[0], true); };
   if (S.done) {
     $('#home').onclick = () => { S = null; view = 'setup'; render(); };
