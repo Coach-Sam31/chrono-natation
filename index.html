@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Chrono">
@@ -34,6 +34,8 @@ img { max-width: 100%; }
   --wait: #d5e0e5;
   --done: #dfe7ea;
   --warn: #b93a07;
+  --start: #d6141f;
+  --start-ink: #ffffff;
   --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
   --font-body: "Barlow", "Helvetica Neue", Arial, sans-serif;
 }
@@ -106,6 +108,9 @@ details.essai > * + * { margin-top: 12px; }
 .tile.wait { background: var(--wait); border-style: dashed; }
 .tile.wait .time { font-size: clamp(12px, min(22cqh, 13cqw), 24px); color: var(--muted); }
 .tile.hot { background: var(--hot); border-color: var(--hot-ink); color: var(--hot-ink); }
+/* 3 dernières secondes avant le départ du nageur : rouge plein, pour le lancer */
+.tile.wait.go { background: var(--start); border: 3px solid var(--start); color: var(--start-ink); }
+.tile.wait.go .time, .tile.wait.go .meta { color: var(--start-ink); }
 .tile.hot .meta { color: var(--hot-ink); }
 .tile.done { background: var(--done); border-color: var(--done); opacity: .7; }
 .tile.cb { border-color: var(--lane); border-style: solid; }
@@ -147,6 +152,9 @@ h2 { font-family: var(--font-display); font-weight: 700; font-size: 24px; margin
 .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+/* Pas de zoom involontaire : double-tap neutralisé partout, et champs à 16px (l'iPad zoome sur un champ plus petit) */
+* { touch-action: manipulation; }
+input, select, textarea { font-size: 16px !important; }
 .field input, .field select { border: 2px solid var(--line); background: var(--surface); border-radius: 8px; padding: 10px; min-height: 48px; box-sizing: border-box; -webkit-user-select: text; user-select: text; }
 .preview { display: flex; flex-direction: column; gap: 6px; }
 .preview div { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -199,11 +207,12 @@ let HIST = [];
 // ---------- Utilitaires ----------
 const $ = (sel, root = document) => root.querySelector(sel);
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-function fmt(sec) {
+// Temps enregistrés au centième (1'12"43) ; le temps qui défile sur la tuile reste au dixième (dec = 1).
+function fmt(sec, dec = 2) {
   if (sec == null) return '';
-  const t = Math.round(sec * 10) / 10, m = Math.floor(t / 60), s = t - m * 60;
-  const ss = Math.floor(s), d = Math.round((s - ss) * 10);
-  return m ? `${m}'${String(ss).padStart(2, '0')}"${d}` : `${ss}"${d}`;
+  const u = 10 ** dec, t = Math.round(sec * u), m = Math.floor(t / (60 * u)), rest = t - m * 60 * u;
+  const ss = Math.floor(rest / u), frac = String(rest % u).padStart(dec, '0');
+  return m ? `${m}'${String(ss).padStart(2, '0')}"${frac}` : `${ss}"${frac}`;
 }
 function fmtClock(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -445,6 +454,10 @@ function leadRep() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.n
 async function keepAwake() {
   try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
 }
+// Pincer ou double-taper ne doit jamais agrandir l'écran en pleine série (Safari iPad ignore parfois la balise viewport).
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && view === 'chrono' && S && S.T0) keepAwake(); });
 
 // ---------- Écran Préparation ----------
@@ -665,8 +678,8 @@ function tick() {
     else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][0]}ᵉ départ`; meta = `rép. 1 / ${nb()}`; }
     else {
       const d = dep(id, p);
-      if (now < d) { cls += ' wait'; time = `Départ ${Math.ceil((d - now) / 1000)}"`; }
-      else { time = fmt((now - d) / 1000); if (now >= expected(id, p) - HOT_BEFORE_MS) cls += ' hot'; }
+      if (now < d) { cls += ' wait' + (d - now <= 3000 ? ' go' : ''); time = `Départ ${Math.ceil((d - now) / 1000)}"`; }
+      else { time = fmt((now - d) / 1000, 1); if (now >= expected(id, p) - HOT_BEFORE_MS) cls += ' hot'; }
       meta = `rép. ${p + 1} / ${nb()}` + (last ? ` · ${fmt(last.t)}` : '');
     }
     if (S.T0 != null && cbTarget(id) != null) { cls += ' cb'; meta = 'CB à noter' + (meta ? ' · ' + meta : ''); }
@@ -758,7 +771,7 @@ function openFix(id, r) {
   $('#x-miss').onclick = () => { setResult(id, rep(), { t: null, st: 'manque' }); done('Marqué manqué'); };
   $('#x-nf').onclick = () => { setResult(id, rep(), { t: null, st: 'non_faite' }); done('Marqué non faite'); };
 }
-function fmtEdit(sec) { const m = Math.floor(sec / 60), s = (sec - m * 60).toFixed(1); return m ? `${m}:${s.padStart(4, '0')}` : s; }
+function fmtEdit(sec) { const m = Math.floor(sec / 60), s = (sec - m * 60).toFixed(2); return m ? `${m}:${s.padStart(5, '0')}` : s; }
 
 // ---------- Récap ----------
 // ---------- RPE : un chiffre 0–10 par nageur et par série ----------
