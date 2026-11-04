@@ -1,0 +1,15 @@
+{
+  "name": "Chrono multi-nageurs",
+  "short_name": "Chrono",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#e9f0f3",
+  "theme_color": "#0b5aa3",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

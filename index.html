@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Chrono">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#0b5aa3">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; height: 100%; }
+body { margin: 0; font: 14px/1.4 system-ui, sans-serif; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+</style>
+<title>Chrono multi-nageurs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Plage de bassin : un bandeau chrono en haut, une rangée par ligne d'eau, tuiles = nageurs dans l'ordre d'arrivée attendu */
+:root {
+  --bg: #e9f0f3;
+  --surface: #ffffff;
+  --ink: #06202c;
+  --muted: #4f6873;
+  --line: #b9cbd3;
+  --lane: #0b5aa3;
+  --lane-ink: #ffffff;
+  --hot: #ffd400;
+  --hot-ink: #1a1600;
+  --wait: #d5e0e5;
+  --done: #dfe7ea;
+  --warn: #b93a07;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --font-body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #061118; --surface: #0f2430; --ink: #eaf4f8; --muted: #8fa9b4; --line: #26414e;
+    --lane: #4aa3ff; --lane-ink: #04121a; --hot: #ffd400; --hot-ink: #1a1600;
+    --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #061118; --surface: #0f2430; --ink: #eaf4f8; --muted: #8fa9b4; --line: #26414e;
+  --lane: #4aa3ff; --lane-ink: #04121a; --hot: #ffd400; --hot-ink: #1a1600;
+  --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c; color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px;
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  touch-action: manipulation; overflow: hidden;
+}
+#app { height: 100%; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; touch-action: manipulation; }
+:focus-visible { outline: 3px solid var(--lane); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+
+.view { height: 100%; display: flex; flex-direction: column; gap: 10px; padding-block: 10px 28px; box-sizing: border-box; }
+
+/* Bandeau */
+.bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.clock { font-family: var(--font-display); font-weight: 700; font-size: clamp(38px, 7vw, 64px); line-height: 1; letter-spacing: .01em; }
+.rep { font-family: var(--font-display); font-weight: 600; font-size: clamp(20px, 3.4vw, 30px); color: var(--muted); }
+.rep b { color: var(--ink); }
+.bar .spacer { flex: 1; }
+.btn { border: 2px solid var(--ink); background: var(--surface); border-radius: 10px; padding: 12px 18px; font-weight: 600; min-height: 52px; }
+.btn.big { font-family: var(--font-display); font-size: 26px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 10px 26px; }
+.btn.go { background: var(--lane); color: var(--lane-ink); border-color: var(--lane); }
+.btn.undo { font-size: 18px; }
+.btn.danger { border-color: var(--warn); color: var(--warn); }
+.btn:disabled { opacity: .35; }
+
+/* Grille */
+.lanes { flex: 1; min-height: 0; display: grid; gap: 8px; }
+.lane { display: grid; grid-template-columns: 34px 1fr; gap: 6px; min-height: 0; }
+.lane-tag { background: var(--lane); color: var(--lane-ink); border-radius: 8px; display: grid; place-items: center; font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+.tiles { display: grid; gap: 6px; min-height: 0; }
+.lane.bout { grid-template-columns: none; grid-template-rows: 30px minmax(0, 1fr); min-width: 0; }
+.lane.bout .lane-tag { font-size: 18px; }
+.hist { display: flex; flex-direction: column; gap: 8px; }
+.hist-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; text-align: left; border: 2px solid var(--line); background: var(--surface); border-radius: 10px; padding: 12px 14px; min-height: 52px; }
+.hist-item span { color: var(--muted); font-size: 14px; }
+.tile {
+  position: relative; border: 3px solid var(--line); background: var(--surface); border-radius: 12px;
+  padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; min-height: 0;
+  overflow: hidden; touch-action: none; gap: 2px;
+  container-type: size; /* le texte se règle sur la taille de la tuile, quelle que soit la vue */
+}
+.tile .name { font-family: var(--font-display); font-weight: 700; font-size: clamp(12px, min(22cqh, 15cqw), 30px); line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.tile .time { font-family: var(--font-display); font-weight: 700; font-size: clamp(14px, min(32cqh, 20cqw), 44px); line-height: 1.1; white-space: nowrap; }
+.tile .meta { font-size: clamp(9px, min(13cqh, 9cqw), 14px); line-height: 1.25; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lanes.dense .tile { padding: 4px 6px; border-width: 2px; border-radius: 10px; }
+.lanes.dense .tile .badge { font-size: 9px; padding: 1px 4px; top: 3px; right: 3px; }
+.tile.wait { background: var(--wait); border-style: dashed; }
+.tile.wait .time { font-size: clamp(12px, min(22cqh, 13cqw), 24px); color: var(--muted); }
+.tile.hot { background: var(--hot); border-color: var(--hot-ink); color: var(--hot-ink); }
+.tile.hot .meta { color: var(--hot-ink); }
+.tile.done { background: var(--done); border-color: var(--done); opacity: .7; }
+.tile.cb { border-color: var(--lane); border-style: solid; }
+.tile.cb .meta { color: var(--lane); font-weight: 600; }
+.pad { border: 3px solid var(--lane); background: var(--surface); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.pad-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pad-head b { font-family: var(--font-display); font-size: 24px; }
+.pad-head span { color: var(--muted); flex: 1; }
+.pad-head .btn { min-height: 40px; padding: 6px 14px; }
+.pad-lens { display: flex; gap: 6px; flex-wrap: wrap; }
+.pad-len { border: 2px solid var(--line); background: var(--bg); border-radius: 8px; min-width: 56px; padding: 4px 8px; display: flex; flex-direction: column; align-items: center; }
+.pad-len small { color: var(--muted); font-size: 11px; }
+.pad-len b { font-family: var(--font-display); font-size: 24px; line-height: 1.1; }
+.pad-len.on { border-color: var(--lane); background: var(--surface); }
+.pad-keys { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+.pad-key { border: 2px solid var(--ink); background: var(--surface); border-radius: 10px; min-height: 52px; font-family: var(--font-display); font-weight: 700; font-size: 26px; }
+.pad-key.go { background: var(--lane); color: var(--lane-ink); border-color: var(--lane); }
+@media (max-width: 700px) { .pad-keys { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.cbline { font-size: 12px; color: var(--muted); }
+.rpe-keys { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.rpe-keys .pad-key { min-height: 64px; font-size: 30px; }
+td.rpe-cell { text-align: center; font-size: 18px; }
+.todo { color: var(--warn); font-size: 13px; font-weight: 600; }
+td.cb-missing .cbline { color: var(--warn); }
+.tile.flash { animation: flash .35s; }
+.tile.tapped { border-color: var(--lane); }
+.tile .badge { position: absolute; top: 6px; right: 6px; background: var(--warn); color: #fff; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 2px 6px; }
+.tile::after { content: ""; position: absolute; left: 0; bottom: 0; height: 6px; width: 0; background: var(--lane); }
+.tile.pressing::after { width: 100%; transition: width .9s linear; }
+@keyframes flash { 0%, 100% { transform: none; } 30% { transform: translateX(-5px); } 70% { transform: translateX(5px); } }
+@media (prefers-reduced-motion: reduce) { .tile.flash { animation: none; } .tile.pressing::after { transition: none; } }
+
+/* Préparation & récap */
+.scroll { overflow-y: auto; flex: 1; min-height: 0; }
+.panel { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: 36px; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-weight: 700; font-size: 24px; margin: 0; }
+.note { color: var(--muted); margin: 0; max-width: 65ch; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.field input, .field select { border: 2px solid var(--line); background: var(--surface); border-radius: 8px; padding: 10px; min-height: 48px; box-sizing: border-box; -webkit-user-select: text; user-select: text; }
+.preview { display: flex; flex-direction: column; gap: 6px; }
+.preview div { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.chip { border: 2px solid var(--line); background: var(--surface); border-radius: 8px; padding: 4px 10px; font-weight: 600; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+td.cell { cursor: pointer; }
+td.manque { color: var(--warn); font-weight: 600; }
+td.nf { color: var(--muted); font-style: italic; }
+
+/* Menus */
+.overlay { position: fixed; inset: 0; background: rgb(0 0 0 / .45); display: grid; place-items: center; padding: 16px; z-index: 20; }
+.sheet { background: var(--surface); color: var(--ink); border-radius: 14px; padding: 18px; width: min(460px, 100%); display: flex; flex-direction: column; gap: 12px; max-height: 90%; overflow-y: auto; box-sizing: border-box; }
+.sheet .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.sheet .row > * { flex: 1; }
+.order { display: flex; gap: 6px; flex-wrap: wrap; }
+.order .chip.me { border-color: var(--lane); background: var(--lane); color: var(--lane-ink); }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; z-index: 30; }
+</style>
+
+</head>
+<body>
+<div id="app"></div>
+<div id="layer"></div>
+
+<script>
+const KEY = 'chrono-maquette-v1';
+const KEY_HIST = 'chrono-maquette-historique-v1';
+const NAMES = ['Léa M.', 'Tom B.', 'Inès R.', 'Hugo D.', 'Jade P.', 'Noah L.', 'Manon G.', 'Enzo F.',
+  'Chloé T.', 'Lucas V.', 'Zoé C.', 'Malo S.', 'Lina A.', 'Adam K.', 'Rose N.', 'Théo J.',
+  'Emma H.', 'Louis E.', 'Alice W.', 'Jules O.', 'Lou Q.', 'Nino Y.', 'Anna U.', 'Gabin I.',
+  'Mia Z.', 'Sacha X.', 'Eva B.', 'Liam C.', 'Nina D.', 'Paul F.', 'Sara G.', 'Yanis H.'];
+const LONG_PRESS_MS = 900, DISPLAY_DELAY_MS = 1000, HOT_BEFORE_MS = 4000;
+
+let S = null;          // état de la série (sauvegardé à chaque action)
+let view = 'setup';    // setup | chrono | recap
+let display = [];      // ordre affiché des tuiles par ligne (suit S.queue avec ~1" de retard)
+let laneTimers = [];
+let undoStack = [];
+let presses = new Map();
+let tileEls = {};
+let wakeLock = null;
+let finishTimer = null;
+let HIST = [];
+
+// ---------- Utilitaires ----------
+const $ = (sel, root = document) => root.querySelector(sel);
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function fmt(sec) {
+  if (sec == null) return '';
+  const t = Math.round(sec * 10) / 10, m = Math.floor(t / 60), s = t - m * 60;
+  const ss = Math.floor(s), d = Math.round((s - ss) * 10);
+  return m ? `${m}'${String(ss).padStart(2, '0')}"${d}` : `${ss}"${d}`;
+}
+function fmtClock(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+function parseTime(str) {
+  str = String(str).trim().replace(',', '.').replace(/"/g, '.').replace(/'/g, ':');
+  if (!str) return null;
+  const p = str.split(':');
+  const v = p.length === 2 ? Number(p[0]) * 60 + Number(p[1]) : Number(p[0]);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+// Série en cours sous KEY ; séries terminées dans l'historique (HIST), toujours modifiables.
+function save() {
+  if (!S) return;
+  try {
+    if (S.done) {
+      const i = HIST.findIndex(x => x.uid === S.uid);
+      if (i >= 0) HIST[i] = S; else HIST.unshift(S);
+      localStorage.setItem(KEY_HIST, JSON.stringify(HIST));
+    } else localStorage.setItem(KEY, JSON.stringify(S));
+  } catch (e) {}
+}
+function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); return s && !s.done ? s : null; } catch (e) { return null; } }
+function loadHist() { try { return JSON.parse(localStorage.getItem(KEY_HIST)) || []; } catch (e) { return []; } }
+function fmtDate(ts) { return new Date(ts).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+// Bouton à deux temps (le navigateur n'affiche pas de fenêtre de confirmation)
+function armed(btn, confirmLabel, action) {
+  const label = btn.textContent;
+  btn.onclick = () => {
+    if (btn.dataset.armed) { action(); return; }
+    btn.dataset.armed = '1'; btn.textContent = confirmLabel;
+    setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = label; } }, 4000);
+  };
+}
+function toast(msg) {
+  const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
+  document.body.appendChild(el); setTimeout(() => el.remove(), 2200);
+}
+
+// ---------- Calcul des temps (§4 du cahier des charges) ----------
+const nb = () => S.cfg.nbRep;
+const cycleMs = () => S.cfg.cycle * 1000;
+function laneOf(id) { return S.lanes.findIndex(l => l.includes(id)); }
+function dep(id, r) { return S.T0 + r * cycleMs() + (S.order[id][r] - 1) * S.cfg.vague * 1000; }
+function pending(id) { return S.res[id].findIndex(x => !x); }
+function expected(id, p) {
+  const prev = S.res[id].slice(0, p).reverse().find(x => x && x.st === 'ok');
+  const est = prev ? prev.t : S.cfg.cycle * 0.75;
+  return dep(id, p) + est * 1000;
+}
+
+function newSeries(cfg) {
+  const lanes = [], order = {}, res = {}, names = {};
+  let k = 0;
+  for (let l = 0; l < cfg.lanes; l++) {
+    const ids = [];
+    for (let i = 0; i < cfg.perLane; i++) {
+      const id = 's' + k; names[id] = NAMES[k++]; ids.push(id);
+      order[id] = Array(cfg.nbRep).fill(i + 1);
+      res[id] = Array(cfg.nbRep).fill(null);
+    }
+    lanes.push(ids);
+  }
+  S = { uid: Date.now(), cfg, names, lanes, laneOrder: lanes.map(l => [...l]), queue: lanes.map(l => [...l]), order, res, T0: null };
+  syncDisplay(); undoStack = []; save();
+}
+
+// ---------- Coups de bras : un chiffre par longueur, sur les répétitions comptées ----------
+// Hors de la pile Annuler : « Annuler » ne défait que les taps chrono.
+function nLen() { return Math.max(1, Math.round(S.cfg.distance / (S.cfg.bassin || 25))); }
+function isCounted(r) { return (S.cfg.countReps || []).includes(r + 1); }
+function cbOf(id, r) { return (S.cb && S.cb[id] && S.cb[id][r]) || null; }
+function setCb(id, r, arr) {
+  S.cb = S.cb || {}; S.cb[id] = S.cb[id] || Array(nb()).fill(null);
+  S.cb[id][r] = arr.some(v => v != null) ? arr : null; save();
+}
+function cbComplete(id, r) { const a = cbOf(id, r); return !!a && a.length === nLen() && a.every(v => v != null); }
+function cbText(a) { return a ? a.map(v => v == null ? '?' : v).join('·') : ''; }
+// Répétition dont les coups de bras restent à noter (la dernière terminée, si elle est comptée)
+function cbTarget(id) {
+  const r = S.res[id].reduce((acc, x, i) => (x ? i : acc), -1);
+  return r >= 0 && S.res[id][r].st === 'ok' && isCounted(r) && !cbComplete(id, r) ? r : null;
+}
+
+function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, T0: S.T0 }); }
+function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 300) undoStack.shift(); }
+function undo() {
+  const s = undoStack.pop(); if (!s) return;
+  Object.assign(S, JSON.parse(s)); syncDisplay(); save(); render(); toast('Dernière action annulée');
+}
+function syncDisplay() { display = S.queue.map(q => [...q]); laneTimers.forEach(clearTimeout); }
+function scheduleDisplay(l, delay = DISPLAY_DELAY_MS) {
+  clearTimeout(laneTimers[l]);
+  laneTimers[l] = setTimeout(() => {
+    // Jamais de redessin pendant qu'un doigt est posé : le relâcher serait perdu.
+    if (presses.size) { scheduleDisplay(l, 250); return; }
+    display[l] = [...S.queue[l]]; buildGrid();
+  }, delay);
+}
+function moveToEnd(id) { const q = S.queue[laneOf(id)]; q.splice(q.indexOf(id), 1); q.push(id); }
+
+function tap(id, t) {
+  if (S.T0 == null) return;
+  let p = pending(id);
+  if (p < 0) { const r = cbTarget(id); if (r != null) openPad(id, r); return; } // série finie : il peut rester ses coups de bras
+  // Nageur au repos : le tap ouvre le pavé des coups de bras s'il en reste à noter.
+  if (t < dep(id, p)) { const r = cbTarget(id); if (r != null) openPad(id, r); else flash(id); return; }
+  pushUndo();
+  // Tap oublié : si on est déjà après le départ de la répétition suivante, ce tap lui appartient.
+  while (p + 1 < nb() && t >= dep(id, p + 1)) { S.res[id][p] = { t: null, st: 'manque', auto: true }; p++; }
+  S.res[id][p] = { t: (t - dep(id, p)) / 1000, st: 'ok' };
+  moveToEnd(id); save(); scheduleDisplay(laneOf(id)); checkFinish();
+  const el = tileEls[id]; if (el) { el.classList.add('tapped'); setTimeout(() => el.classList.remove('tapped'), 400); }
+}
+function flash(id) { const el = tileEls[id]; if (!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+
+function markPending(id, st) {
+  const p = pending(id); if (p < 0) return;
+  pushUndo(); S.res[id][p] = { t: null, st }; moveToEnd(id);
+  display[laneOf(id)] = [...S.queue[laneOf(id)]]; save(); checkFinish();
+}
+
+// Fin de série : automatique quand chaque nageur a toutes ses répétitions, ou via « Terminer ».
+function allDone() { return S.lanes.flat().every(id => pending(id) < 0); }
+function cbPending() { return S.lanes.flat().some(id => cbTarget(id) != null); }
+// La série se range seule quand tout est chronométré ET que les coups de bras de la dernière rép. sont notés.
+function checkFinish() {
+  if (S.T0 == null || S.done || !allDone() || cbPending()) return;
+  clearTimeout(finishTimer);
+  finishTimer = setTimeout(() => { if (S && !S.done && view === 'chrono' && allDone()) finishSeries(false); }, 1500);
+}
+function finishSeries(manual) {
+  if (manual) S.lanes.flat().forEach(id => S.res[id].forEach((x, r) => { if (!x) S.res[id][r] = { t: null, st: 'manque' }; }));
+  S.done = true; S.endedAt = Date.now();
+  try { localStorage.removeItem(KEY); } catch (e) {}
+  save(); undoStack = []; clearTimeout(finishTimer);
+  try { if (wakeLock) wakeLock.release(); } catch (e) {}
+  closeLayer(); view = 'recap'; render(); toast("Série terminée · rangée dans l'historique");
+}
+function setResult(id, r, val) { pushUndo(); S.res[id][r] = val; save(); }
+function nextCycle() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
+function moveInOrder(id, dir) {
+  const l = laneOf(id), arr = S.laneOrder[l], i = arr.indexOf(id), j = i + dir;
+  if (j < 0 || j >= arr.length) return null;
+  pushUndo();
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  const from = nextCycle();
+  arr.forEach((sid, idx) => { for (let r = from; r < nb(); r++) S.order[sid][r] = idx + 1; });
+  if (S.T0 == null) { S.queue[l] = [...arr]; display[l] = [...arr]; }
+  save(); return from;
+}
+function leadRep() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
+
+async function keepAwake() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && view === 'chrono' && S && S.T0) keepAwake(); });
+
+// ---------- Écran Préparation ----------
+function renderSetup() {
+  const live = load();
+  const saved = live && live.T0 != null;
+  const c = Object.assign({ distance: 100, nbRep: 8, cycle: 100, vague: 10, lanes: 3, perLane: 4, view: 'cote-haut', bassin: 25 }, (live || HIST[0] || {}).cfg);
+  const cbDefault = c.countReps ? c.countReps.join(';') : [...new Set([1, Math.ceil(c.nbRep / 2), c.nbRep])].join(';');
+  const VIEWS = [['cote-haut', 'Côté du bassin · ligne 1 en haut'], ['cote-bas', 'Côté du bassin · ligne 1 en bas'], ['bout-gauche', 'Bout du bassin · ligne 1 à gauche'], ['bout-droite', 'Bout du bassin · ligne 1 à droite']];
+  $('#app').innerHTML = `
+  <div class="view"><div class="scroll"><div class="panel">
+    <h1>Chrono multi-nageurs</h1>
+    <p class="note">Maquette d'essai (étape 1.1). Les nageurs sont fictifs. Rien n'est envoyé : tout reste sur cet appareil.</p>
+    ${saved ? `<div class="actions"><button class="btn go big" id="resume">Reprendre la série en cours</button></div>` : ''}
+    <h2>Série</h2>
+    <div class="form">
+      <div class="field"><label for="f-dist">Distance (m)</label><input id="f-dist" type="number" inputmode="numeric" value="${c.distance}"></div>
+      <div class="field"><label for="f-rep">Répétitions</label><input id="f-rep" type="number" inputmode="numeric" min="1" max="30" value="${c.nbRep}"></div>
+      <div class="field"><label for="f-cyc">Départ (cycle)</label><input id="f-cyc" type="text" inputmode="decimal" value="${fmtCycle(c.cycle)}"></div>
+      <div class="field"><label for="f-vag">Vague</label><select id="f-vag">${[5, 10, 15].map(v => `<option value="${v}" ${v == c.vague ? 'selected' : ''}>${v}"</option>`).join('')}</select></div>
+      <div class="field"><label for="f-lanes">Lignes d'eau</label><select id="f-lanes">${[1, 2, 3, 4].map(v => `<option ${v == c.lanes ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="field"><label for="f-per">Nageurs par ligne</label><select id="f-per">${[1, 2, 3, 4, 5, 6, 7, 8].map(v => `<option ${v == c.perLane ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    </div>
+    <div class="form">
+      <div class="field"><label for="f-pool">Bassin</label><select id="f-pool">${[25, 50].map(v => `<option value="${v}" ${v == c.bassin ? 'selected' : ''}>${v} m</option>`).join('')}</select></div>
+      <div class="field"><label for="f-cb">Rép. avec coups de bras</label><input id="f-cb" type="text" inputmode="numeric" value="${cbDefault}"></div>
+    </div>
+    <p class="note">Coups de bras comptés longueur par longueur sur les répétitions indiquées, par exemple <b>1;4;8</b>. Laisse vide pour ne pas compter.</p>
+    <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <p class="note">Exemple de départ : 1'40 s'écrit <b>1:40</b>.</p>
+    <div class="actions"><button class="btn go big" id="start">${saved ? 'Nouvelle série' : 'Préparer la série'}</button></div>
+    ${saved ? `<p class="note">« Nouvelle série » abandonne la série en cours.</p>` : ''}
+    <h2>Historique</h2>
+    ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)}</span></button>`).join('')}</div>`
+      : `<p class="note">Les séries terminées arrivent ici. Tu pourras encore y corriger les temps.</p>`}
+  </div></div></div>`;
+  if (saved) $('#resume').onclick = () => { S = live; syncDisplay(); undoStack = []; view = 'chrono'; keepAwake(); render(); };
+  $('#app').querySelectorAll('.hist-item').forEach(b => b.onclick = () => { S = HIST[+b.dataset.i]; view = 'recap'; render(); });
+  $('#start').onclick = () => {
+    const cycle = parseTime($('#f-cyc').value);
+    if (!cycle) { toast('Cycle illisible : écris par exemple 1:40'); return; }
+    const nbRep = Math.max(1, Math.min(30, parseInt($('#f-rep').value, 10) || 1));
+    const countReps = [...new Set($('#f-cb').value.split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= nbRep))].sort((a, b) => a - b);
+    newSeries({ distance: parseInt($('#f-dist').value, 10) || 100, nbRep, cycle, bassin: +$('#f-pool').value, countReps, vague: +$('#f-vag').value, lanes: +$('#f-lanes').value, perLane: +$('#f-per').value, view: $('#f-view').value });
+    view = 'chrono'; render();
+  };
+}
+function fmtCycle(sec) { const m = Math.floor(sec / 60), s = Math.round(sec - m * 60); return `${m}:${String(s).padStart(2, '0')}`; }
+
+// ---------- Écran Chrono ----------
+function renderChrono() {
+  const c = S.cfg;
+  $('#app').innerHTML = `
+  <div class="view">
+    <div class="bar">
+      <div class="clock num" id="clock">00:00</div>
+      <div class="rep num" id="rep"></div>
+      <div class="spacer"></div>
+      ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button><button class="btn" id="home">Accueil</button>` : `<button class="btn danger" id="end">Terminer</button>`}
+      <button class="btn undo" id="undo">↶ Annuler</button>
+      <button class="btn" id="recap">Récap</button>
+    </div>
+    <div class="lanes ${c.perLane > 4 ? 'dense' : ''}" id="lanes" style="${isBout() ? 'grid-template-columns' : 'grid-template-rows'}: repeat(${c.lanes}, minmax(0, 1fr))"></div>
+    <div id="padbox"></div>
+  </div>`;
+  pad = null;
+  if (S.T0 == null) {
+    $('#go').onclick = () => { pushUndo(); S.T0 = Date.now(); save(); keepAwake(); renderChrono(); };
+    $('#home').onclick = () => { view = 'setup'; render(); };
+  } else armed($('#end'), 'Confirmer la fin', () => finishSeries(true));
+  $('#undo').onclick = undo;
+  $('#recap').onclick = () => { view = 'recap'; render(); };
+  buildGrid(); tick();
+}
+
+// Pavé docké en bas : il ne recouvre pas les tuiles, les arrivées restent tapables pendant la saisie.
+let pad = null; // { id, r, i: longueur en cours, buf: chiffres tapés }
+function openPad(id, r) {
+  const a = cbOf(id, r) || [];
+  const i = Math.max(0, Array.from({ length: nLen() }, (_, k) => a[k]).findIndex(v => v == null));
+  pad = { id, r, i: Math.min(i, nLen() - 1), buf: '' };
+  renderPad();
+}
+function closePad() { pad = null; const box = $('#padbox'); if (box) box.innerHTML = ''; }
+function padCommit() {
+  if (!pad || pad.buf === '') return;
+  const a = Array.from({ length: nLen() }, (_, k) => (cbOf(pad.id, pad.r) || [])[k] ?? null);
+  a[pad.i] = Number(pad.buf); pad.buf = '';
+  setCb(pad.id, pad.r, a);
+  if (pad.i < nLen() - 1) pad.i++;
+  else { const n = S.names[pad.id]; closePad(); toast(`Coups de bras notés · ${n}`); checkFinish(); return; }
+  renderPad();
+}
+function padKey(k) {
+  if (!pad) return;
+  if (k === 'ok') { if (pad.buf === '') { pad.i < nLen() - 1 ? (pad.i++, renderPad()) : closePad(); } else padCommit(); return; }
+  if (k === 'del') {
+    if (pad.buf) pad.buf = pad.buf.slice(0, -1);
+    else { const a = (cbOf(pad.id, pad.r) || []).slice(); if (a[pad.i] != null) { a[pad.i] = null; setCb(pad.id, pad.r, Array.from({ length: nLen() }, (_, x) => a[x] ?? null)); } else if (pad.i > 0) pad.i--; }
+    renderPad(); return;
+  }
+  pad.buf += k;
+  if (pad.buf.length >= 2) padCommit(); else renderPad(); // 2 chiffres = longueur suivante
+}
+function renderPad() {
+  const box = $('#padbox'); if (!box || !pad) return;
+  const a = cbOf(pad.id, pad.r) || [];
+  box.innerHTML = `<div class="pad">
+    <div class="pad-head"><b>${esc(S.names[pad.id])}</b><span>rép. ${pad.r + 1} · coups de bras par ${S.cfg.bassin || 25} m</span><button class="btn" id="pad-x">Fermer</button></div>
+    <div class="pad-lens">${Array.from({ length: nLen() }, (_, k) => `<button class="pad-len ${k === pad.i ? 'on' : ''}" data-k="${k}"><small>L${k + 1}</small><b class="num">${k === pad.i && pad.buf ? pad.buf : (a[k] ?? '–')}</b></button>`).join('')}</div>
+    <div class="pad-keys">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'del', 'ok'].map(k => `<button class="pad-key ${k === 'ok' ? 'go' : ''}" data-key="${k}">${k === 'del' ? '⌫' : k === 'ok' ? 'OK' : k}</button>`).join('')}</div>
+  </div>`;
+  $('#pad-x').onclick = closePad;
+  box.querySelectorAll('.pad-len').forEach(b => b.onclick = () => { pad.buf = ''; pad.i = +b.dataset.k; renderPad(); });
+  box.querySelectorAll('.pad-key').forEach(b => b.onclick = () => padKey(b.dataset.key));
+}
+
+function isBout() { return (S.cfg.view || '').startsWith('bout'); }
+
+function buildGrid() {
+  const box = $('#lanes'); if (!box) return;
+  tileEls = {};
+  presses.forEach(p => clearTimeout(p.timer)); presses.clear();
+  box.innerHTML = '';
+  // La grille reproduit le bassin tel que le chronométreur le voit depuis sa place.
+  const bout = isBout(), order = display.map((_, l) => l);
+  if (S.cfg.view === 'cote-bas' || S.cfg.view === 'bout-droite') order.reverse();
+  order.forEach(l => {
+    const ids = display[l];
+    const lane = document.createElement('div'); lane.className = 'lane' + (bout ? ' bout' : '');
+    lane.innerHTML = `<div class="lane-tag">${bout ? 'L' : ''}${l + 1}</div><div class="tiles" style="${bout ? 'grid-template-rows' : 'grid-template-columns'}: repeat(${ids.length}, minmax(0, 1fr))"></div>`;
+    const tiles = lane.querySelector('.tiles');
+    ids.forEach(id => {
+      const el = document.createElement('div'); el.className = 'tile';
+      el.innerHTML = `<div class="name">${esc(S.names[id])}</div><div class="time num"></div><div class="meta num"></div>`;
+      bindPress(el, id); tiles.appendChild(el); tileEls[id] = el;
+    });
+    box.appendChild(lane);
+  });
+  tick();
+}
+
+function bindPress(el, id) {
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const t = Date.now(); // l'instant du toucher fait foi, pas celui du relâcher
+    try { el.setPointerCapture(e.pointerId); } catch (err) {} // le relâcher revient à cette tuile, même si le doigt glisse
+    el.classList.add('pressing');
+    const p = { id, t, x: e.clientX, y: e.clientY, long: false, timer: setTimeout(() => { p.long = true; el.classList.remove('pressing'); openMenu(id); }, LONG_PRESS_MS) };
+    presses.set(e.pointerId, p);
+  });
+  el.addEventListener('pointermove', e => {
+    // Un doigt mouillé qui glisse n'est pas un appui long : on garde le tap, on annule le menu.
+    const p = presses.get(e.pointerId);
+    if (p && !p.long && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12) { clearTimeout(p.timer); el.classList.remove('pressing'); }
+  });
+  const end = (e, commit) => {
+    const p = presses.get(e.pointerId); if (!p) return;
+    presses.delete(e.pointerId); clearTimeout(p.timer); el.classList.remove('pressing');
+    if (!p.long && (commit || Date.now() - p.t < LONG_PRESS_MS)) tap(p.id, p.t);
+  };
+  el.addEventListener('pointerup', e => end(e, true));
+  // L'iPad annule parfois un toucher près du bord (gestes système) : un toucher bref reste un tap.
+  el.addEventListener('pointercancel', e => end(e, false));
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+function tick() {
+  if (view !== 'chrono' || !S) return;
+  const now = Date.now();
+  const clock = $('#clock'), rep = $('#rep');
+  const finished = S.T0 != null && allDone();
+  if (clock) clock.textContent = S.T0 == null ? '00:00' : finished ? 'Fini' : fmtClock(now - S.T0);
+  if (rep) rep.innerHTML = S.T0 == null ? `${S.cfg.nbRep} × ${S.cfg.distance} · départ ${fmtCycle(S.cfg.cycle)} · vagues ${S.cfg.vague}"`
+    : finished ? `Coups de bras à noter, puis la série se range` : `Rép. <b>${leadRep()}</b> / ${nb()}`;
+  for (const id in tileEls) {
+    const el = tileEls[id], p = pending(id), r = S.res[id];
+    const last = r.slice().reverse().find(x => x && x.st === 'ok');
+    const autoMiss = r.some(x => x && x.auto);
+    let cls = 'tile', time = '', meta = '';
+    if (p < 0) { cls += ' done'; time = 'Fini'; meta = last ? `dernier ${fmt(last.t)}` : ''; }
+    else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][0]}ᵉ départ`; meta = `rép. 1 / ${nb()}`; }
+    else {
+      const d = dep(id, p);
+      if (now < d) { cls += ' wait'; time = `Départ ${Math.ceil((d - now) / 1000)}"`; }
+      else { time = fmt((now - d) / 1000); if (now >= expected(id, p) - HOT_BEFORE_MS) cls += ' hot'; }
+      meta = `rép. ${p + 1} / ${nb()}` + (last ? ` · ${fmt(last.t)}` : '');
+    }
+    if (S.T0 != null && cbTarget(id) != null) { cls += ' cb'; meta = 'CB à noter' + (meta ? ' · ' + meta : ''); }
+    if (el.classList.contains('pressing')) cls += ' pressing';
+    if (el.classList.contains('tapped')) cls += ' tapped';
+    if (el.className !== cls) el.className = cls;
+    el.querySelector('.time').textContent = time;
+    el.querySelector('.meta').textContent = meta;
+    let b = el.querySelector('.badge');
+    if (autoMiss && !b) { b = document.createElement('div'); b.className = 'badge'; b.textContent = 'manqué'; el.appendChild(b); }
+    if (!autoMiss && b) b.remove();
+  }
+}
+setInterval(tick, 100);
+
+// ---------- Menu appui long ----------
+function closeLayer() { $('#layer').innerHTML = ''; }
+function openMenu(id) {
+  const p = pending(id), l = laneOf(id);
+  const lastOk = S.res[id].reduce((acc, x, i) => (x && x.st === 'ok' ? i : acc), -1);
+  const orderHtml = () => S.laneOrder[l].map((sid, i) => `<span class="chip ${sid === id ? 'me' : ''}">${i + 1}. ${esc(S.names[sid])}</span>`).join('');
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Actions pour ${esc(S.names[id])}">
+    <h2>${esc(S.names[id])} · ligne ${l + 1}</h2>
+    ${p >= 0 ? `<div class="row">
+      <button class="btn" id="m-miss">Manqué (rép. ${p + 1})</button>
+      <button class="btn" id="m-nf">Non faite (rép. ${p + 1})</button>
+    </div>` : '<p class="note">Série terminée pour ce nageur.</p>'}
+    ${lastOk >= 0 ? `<button class="btn" id="m-cb">Coups de bras (rép. ${lastOk + 1})</button>` : ''}
+    <button class="btn" id="m-fix">Corriger un temps…</button>
+    <h2>Ordre de départ</h2>
+    <div class="order" id="m-order">${orderHtml()}</div>
+    <div class="row">
+      <button class="btn" id="m-up">← Part plus tôt</button>
+      <button class="btn" id="m-down">Part plus tard →</button>
+    </div>
+    <p class="note" id="m-info">Le nouvel ordre s'applique à partir de la rép. ${nextCycle() + 1}.</p>
+    <button class="btn big" id="m-close">Fermer</button>
+  </div></div>`;
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+  $('#m-close').onclick = closeLayer;
+  if (p >= 0) {
+    $('#m-miss').onclick = () => { markPending(id, 'manque'); closeLayer(); buildGrid(); };
+    $('#m-nf').onclick = () => { markPending(id, 'non_faite'); closeLayer(); buildGrid(); };
+  }
+  if (lastOk >= 0) $('#m-cb').onclick = () => { closeLayer(); openPad(id, lastOk); };
+  $('#m-fix').onclick = () => openFix(id, Math.max(0, (p < 0 ? nb() : p) - 1));
+  const mv = dir => {
+    const from = moveInOrder(id, dir); if (from == null) return;
+    $('#m-order').innerHTML = orderHtml();
+    $('#m-info').textContent = from >= nb() ? 'Plus de répétition à venir : rien ne change.' : `Nouvel ordre appliqué à partir de la rép. ${from + 1}.`;
+    buildGrid();
+  };
+  $('#m-up').onclick = () => mv(-1);
+  $('#m-down').onclick = () => mv(1);
+}
+
+function openFix(id, r) {
+  const cur = S.res[id][r];
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Corriger un temps">
+    <h2>Corriger · ${esc(S.names[id])}</h2>
+    <div class="field"><label for="x-rep">Répétition</label>
+      <select id="x-rep">${S.res[id].map((x, i) => `<option value="${i}" ${i === r ? 'selected' : ''}>Rép. ${i + 1}${x ? ' · ' + (x.st === 'ok' ? fmt(x.t) : x.st === 'manque' ? 'manqué' : 'non faite') : ''}</option>`).join('')}</select></div>
+    <div class="field"><label for="x-time">Temps (ex. 1:12.4)</label><input id="x-time" type="text" inputmode="decimal" value="${cur && cur.st === 'ok' ? fmtEdit(cur.t) : ''}"></div>
+    <div class="field"><label>Coups de bras par longueur${isCounted(r) ? '' : ' (rép. non comptée)'}</label>
+      <div class="row">${Array.from({ length: nLen() }, (_, k) => `<input id="x-cb${k}" type="text" inputmode="numeric" aria-label="Longueur ${k + 1}" placeholder="L${k + 1}" value="${(cbOf(id, r) || [])[k] ?? ''}" style="min-width:48px">`).join('')}</div></div>
+    <div class="row">
+      <button class="btn go" id="x-save">Enregistrer</button>
+    </div>
+    <div class="row">
+      <button class="btn" id="x-miss">Manqué</button>
+      <button class="btn" id="x-nf">Non faite</button>
+    </div>
+    <button class="btn big" id="x-close">Fermer</button>
+  </div></div>`;
+  const rep = () => +$('#x-rep').value;
+  $('#x-rep').onchange = () => openFix(id, rep());
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+  $('#x-close').onclick = closeLayer;
+  const done = msg => { closeLayer(); render(); toast(msg); };
+  $('#x-save').onclick = () => {
+    const raw = $('#x-time').value.trim(), v = parseTime(raw);
+    if (raw && !v) { toast('Temps illisible : écris par exemple 1:12.4'); return; }
+    const cb = Array.from({ length: nLen() }, (_, k) => { const n = parseInt($('#x-cb' + k).value, 10); return Number.isFinite(n) && n > 0 ? n : null; });
+    if (v) setResult(id, rep(), { t: v, st: 'ok' });
+    setCb(id, rep(), cb); done('Enregistré');
+  };
+  $('#x-miss').onclick = () => { setResult(id, rep(), { t: null, st: 'manque' }); done('Marqué manqué'); };
+  $('#x-nf').onclick = () => { setResult(id, rep(), { t: null, st: 'non_faite' }); done('Marqué non faite'); };
+}
+function fmtEdit(sec) { const m = Math.floor(sec / 60), s = (sec - m * 60).toFixed(1); return m ? `${m}:${s.padStart(4, '0')}` : s; }
+
+// ---------- Récap ----------
+// ---------- RPE : un chiffre 0–10 par nageur et par série ----------
+function rpeOf(id) { return S.rpe && S.rpe[id] != null ? S.rpe[id] : null; }
+function rpeMissing() { return S.lanes.flat().filter(id => rpeOf(id) == null).length; }
+// seq = enchaînement : après chaque choix, on passe au nageur suivant (ordre des lignes), comme quand tu fais le tour du bassin.
+function openRpe(id, seq) {
+  const ids = S.lanes.flat(), i = ids.indexOf(id), cur = rpeOf(id);
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="RPE de ${esc(S.names[id])}">
+    <h2>RPE · ${esc(S.names[id])}</h2>
+    <p class="note">Ligne ${laneOf(id) + 1}${seq ? ` · nageur ${i + 1} / ${ids.length}` : ''} · 0 = repos, 10 = maximal</p>
+    <div class="rpe-keys">${[...Array(11).keys()].map(n => `<button class="pad-key ${n === cur ? 'go' : ''}" data-n="${n}">${n}</button>`).join('')}</div>
+    <div class="row">
+      ${seq && i < ids.length - 1 ? `<button class="btn" id="r-skip">Passer</button>` : ''}
+      ${cur != null ? `<button class="btn" id="r-clear">Effacer</button>` : ''}
+      <button class="btn" id="r-close">Fermer</button>
+    </div>
+  </div></div>`;
+  const finish = () => { closeLayer(); render(); };
+  const next = () => (seq && i < ids.length - 1 ? openRpe(ids[i + 1], true) : finish());
+  $('#layer').querySelectorAll('.rpe-keys button').forEach(b => b.onclick = () => {
+    S.rpe = S.rpe || {}; S.rpe[id] = +b.dataset.n; save(); next();
+  });
+  if ($('#r-skip')) $('#r-skip').onclick = next;
+  if ($('#r-clear')) $('#r-clear').onclick = () => { delete S.rpe[id]; save(); finish(); };
+  $('#r-close').onclick = finish;
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') finish(); });
+}
+
+// Moyenne des coups de bras, longueur par longueur, sur les répétitions où ils ont été notés
+function cbAvgHtml(id) {
+  const avg = Array.from({ length: nLen() }, (_, k) => {
+    const v = [...Array(nb()).keys()].map(r => (cbOf(id, r) || [])[k]).filter(x => x != null);
+    return v.length ? (v.reduce((a, b) => a + b, 0) / v.length).toFixed(1).replace('.', ',') : null;
+  });
+  return avg.some(x => x != null) ? `<div class="cbline num">${avg.map(x => x ?? '–').join(' · ')}</div>` : '';
+}
+
+function renderRecap() {
+  const reps = [...Array(nb()).keys()];
+  const rows = S.lanes.map((ids, l) => ids.map(id => {
+    const ok = S.res[id].filter(x => x && x.st === 'ok').map(x => x.t);
+    const avg = ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : null;
+    return `<tr><td><b>${esc(S.names[id])}</b> · L${l + 1}</td>${reps.map(r => {
+      const x = S.res[id][r], a = cbOf(id, r);
+      const missing = isCounted(r) && x && x.st === 'ok' && !cbComplete(id, r);
+      const cb = a ? `<div class="cbline num">${cbText(a)}</div>` : missing ? `<div class="cbline">CB à noter</div>` : '';
+      const attrs = `data-id="${id}" data-r="${r}"`;
+      if (!x) return `<td class="cell" ${attrs}>·${cb}</td>`;
+      if (x.st === 'manque') return `<td class="cell manque" ${attrs}>manqué${cb}</td>`;
+      if (x.st === 'non_faite') return `<td class="cell nf" ${attrs}>non faite${cb}</td>`;
+      return `<td class="cell ${missing ? 'cb-missing' : ''}" ${attrs}>${fmt(x.t)}${cb}</td>`;
+    }).join('')}<td><b>${fmt(avg)}</b>${cbAvgHtml(id)}</td>
+      <td class="cell rpe-cell" data-rpe="${id}">${rpeOf(id) != null ? `<b>${rpeOf(id)}</b>` : '<span class="todo">à noter</span>'}</td></tr>`;
+  }).join('')).join('');
+  $('#app').innerHTML = `
+  <div class="view"><div class="scroll"><div class="panel" style="max-width:none">
+    <div class="bar"><h1>${S.done ? 'Série terminée' : 'Récap en cours'} · ${S.cfg.nbRep} × ${S.cfg.distance}</h1><div class="spacer"></div>
+      ${S.done ? `<button class="btn go" id="home">Accueil</button>` : `<button class="btn go" id="back">Retour au chrono</button>`}</div>
+    ${S.done ? `<p class="note">${fmtDate(S.endedAt)} · départ ${fmtCycle(S.cfg.cycle)} · vagues ${S.cfg.vague}". Rangée dans l'historique.</p>` : ''}
+    <p class="note">Touche une case pour corriger un temps. « manqué » : case vide, aucun temps inventé.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Nageur</th>${reps.map(r => `<th>Rép. ${r + 1}${isCounted(r) ? ' · CB' : ''}</th>`).join('')}<th>Moy. · CB</th><th>RPE</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="actions"><button class="btn go big" id="rpe-all">Noter les RPE${rpeMissing() ? ` (${rpeMissing()} à noter)` : ''}</button></div>
+    <div class="actions">${S.done ? `<button class="btn danger" id="del">Supprimer de l'historique</button>` : `<button class="btn danger" id="end2">Terminer la série</button>`}</div>
+  </div></div></div>`;
+  $('#app').querySelectorAll('td.cell[data-r]').forEach(td => td.onclick = () => openFix(td.dataset.id, +td.dataset.r));
+  $('#app').querySelectorAll('td.rpe-cell').forEach(td => td.onclick = () => openRpe(td.dataset.rpe, false));
+  $('#rpe-all').onclick = () => { const ids = S.lanes.flat(); openRpe(ids.find(id => rpeOf(id) == null) || ids[0], true); };
+  if (S.done) {
+    $('#home').onclick = () => { S = null; view = 'setup'; render(); };
+    armed($('#del'), 'Confirmer : supprimer', () => {
+      HIST = HIST.filter(h => h.uid !== S.uid);
+      try { localStorage.setItem(KEY_HIST, JSON.stringify(HIST)); } catch (e) {}
+      S = null; view = 'setup'; render(); toast('Série supprimée');
+    });
+  } else {
+    $('#back').onclick = () => { view = 'chrono'; render(); };
+    armed($('#end2'), 'Confirmer la fin', () => finishSeries(true));
+  }
+}
+
+function render() {
+  if (view === 'setup' || !S) renderSetup();
+  else if (view === 'chrono') renderChrono();
+  else renderRecap();
+}
+
+// Reprise après fermeture de l'app ou batterie vide
+HIST = loadHist();
+S = load();
+if (S && S.T0 != null) { syncDisplay(); view = 'chrono'; } else S = null;
+render();
+</script>
+<script>
+// Hors ligne : le service worker garde l'app sur l'appareil après la première ouverture.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
