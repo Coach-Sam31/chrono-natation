@@ -314,6 +314,7 @@ function seriesPretes() {
   PLAN.series.forEach(r => { const k = String(r.id_serie); (par[k] = par[k] || []).push(r); });
   return Object.entries(par).map(([id, rows]) => ({ id, rows, f: rows[0] }));
 }
+function nagesSerie(rows) { const n = [...new Set(rows.map(r => String(r.nage || '')).filter(Boolean))]; return n.length > 1 ? 'spé (' + n.join('/') + ')' : (n[0] || ''); }
 function fmtJour(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? String(v) : d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }); }
 function startPlanned(id, viewChoice) {
   const sp = seriesPretes().find(x => x.id === id); if (!sp) return;
@@ -322,6 +323,8 @@ function startPlanned(id, viewChoice) {
   // Cible de chaque nageur : celle tapée à la main, sinon celle calculée depuis ses allures (colonne cible_auto_s)
   const cibleDe = r => +r.temps_cible_s || +r.cible_auto_s || null;
   const cibles = Object.fromEntries(sp.rows.map(r => [String(r.id_nageur), cibleDe(r)]));
+  // Série « spé » : chaque nageur nage sa spécialité, la nage est donc propre à chacun
+  const nages = Object.fromEntries(sp.rows.map(r => [String(r.id_nageur), String(r.nage || '')]));
   // Ordre de départ : celui du Sheet ; sinon du plus rapide au plus lent selon les cibles
   const rang = r => (+r.ordre ? +r.ordre : 1000 + (cibleDe(r) || 999));
   const lanes = laneNums.map(L => sp.rows.filter(r => +r.ligne === L).sort((a, b) => rang(a) - rang(b)).map(r => String(r.id_nageur)));
@@ -336,7 +339,7 @@ function startPlanned(id, viewChoice) {
   buildSeries({
     distance: +f.distance, nbRep, cycle: +f.cycle_s, vague: +f.vague_s, bassin: +f.bassin_m || 25, countReps,
     lanes: lanes.length, perLane: Math.max(...lanes.map(l => l.length)), view: viewChoice,
-    nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cibles, laneNums
+    nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cibles, nages, laneNums
   }, lanes, names, info);
 }
 
@@ -349,7 +352,7 @@ function lignesSheet(s) {
   s.lanes.forEach((ids, l) => ids.forEach(id => s.res[id].forEach((x, r) => {
     const cb = cbOf(id, r);
     rows.push({
-      date, groupe: c.groupe, id_serie: c.idSerie, distance: c.distance, nage: c.nage, bassin_m: c.bassin, nb_rep: c.nbRep,
+      date, groupe: c.groupe, id_serie: c.idSerie, distance: c.distance, nage: (c.nages && c.nages[id]) || c.nage, bassin_m: c.bassin, nb_rep: c.nbRep,
       cycle_s: c.cycle, vague_s: c.vague, ligne: laneLabel(l), ordre: s.order[id][r], id_nageur: id,
       nom: s.info[id].nom, prenom: s.info[id].prenom, rep: r + 1,
       temps_s: x && x.st === 'ok' ? Math.round(x.t * 100) / 100 : '', coups_bras: cb ? cb.map(v => v ?? '').join(';') : '',
@@ -487,7 +490,7 @@ function renderSetup() {
     ${secret ? `
       <div class="actions"><button class="btn" id="load">Charger depuis le Sheet</button></div>
       <p class="note">${PLAN ? `Chargé le ${fmtDate(PLAN.loadedAt)} · ${(PLAN.nageurs || []).length} nageurs.` : 'Charge les séries avec du réseau (la veille ou au vestiaire).'}</p>
-      ${sp.length ? `<div class="hist">${sp.map(x => `<button class="hist-item plan-item" data-id="${esc(x.id)}"><b>${esc(x.f.groupe)} · ${x.f.nb_rep} × ${x.f.distance} ${esc(x.f.nage || '')} · départ ${fmtCycle(+x.f.cycle_s)} · vagues ${x.f.vague_s}" · ${x.rows.length} nageurs</b><span>${fmtJour(x.f.date_prevue)}</span></button>`).join('')}</div>`
+      ${sp.length ? `<div class="hist">${sp.map(x => `<button class="hist-item plan-item" data-id="${esc(x.id)}"><b>${esc(x.f.groupe)} · ${x.f.nb_rep} × ${x.f.distance} ${esc(nagesSerie(x.rows))} · départ ${fmtCycle(+x.f.cycle_s)} · vagues ${x.f.vague_s}" · ${x.rows.length} nageurs</b><span>${fmtJour(x.f.date_prevue)}</span></button>`).join('')}</div>`
         : PLAN ? '<p class="note">Aucune série dans l\'onglet Series_pretes.</p>' : ''}`
     : `<p class="note">Code secret du Sheet, à saisir une seule fois sur cet appareil.</p>
       <div class="actions"><input id="f-secret" type="password" autocomplete="off" style="border:2px solid var(--line);border-radius:8px;padding:10px;min-height:48px;-webkit-user-select:text;user-select:text" aria-label="Code secret"><button class="btn go" id="save-secret">Enregistrer</button></div>`}
