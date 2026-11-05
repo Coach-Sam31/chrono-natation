@@ -391,7 +391,7 @@ function cbTarget(id) {
   return r >= 0 && S.res[id][r].st === 'ok' && isCounted(r) && !cbComplete(id, r) ? r : null;
 }
 
-function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0 }); }
+function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0, absents: S.absents || [] }); }
 function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 300) undoStack.shift(); }
 function undo() {
   const s = undoStack.pop(); if (!s) return;
@@ -450,7 +450,7 @@ function setResult(id, r, val) { pushUndo(); S.res[id][r] = val; touched(); save
 function nextCycle() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
 function moveInOrder(id, dir) {
   const l = laneOf(id), arr = S.laneOrder[l], i = arr.indexOf(id), j = i + dir;
-  if (j < 0 || j >= arr.length) return null;
+  if (i < 0 || j < 0 || j >= arr.length) return null;
   pushUndo();
   [arr[i], arr[j]] = [arr[j], arr[i]];
   const from = nextCycle();
@@ -468,6 +468,65 @@ function moveToLane(id, to) {
   const r0 = nextCycle();
   [from, to].forEach(l => S.laneOrder[l].forEach((sid, idx) => { for (let r = r0; r < nb(); r++) S.order[sid][r] = idx + 1; }));
   syncDisplay(); save(); return r0;
+}
+// Absent (avant le départ) : retiré de la grille, jamais envoyé au Sheet ; ceux derrière lui remontent d'une place.
+function markAbsent(id) {
+  const l = laneOf(id); if (S.T0 != null || l < 0) return;
+  pushUndo();
+  [S.lanes, S.laneOrder, S.queue].forEach(t => { t[l] = t[l].filter(x => x !== id); });
+  S.laneOrder[l].forEach((sid, idx) => S.order[sid].fill(idx + 1));
+  S.absents = [...(S.absents || []), id];
+  syncDisplay(); save();
+}
+// Sort de l'eau (pendant la série) : ses répétitions restantes passent en « non faite » ;
+// ceux qui partaient derrière lui remontent d'une place à partir de la répétition suivante.
+function withdraw(id) {
+  const p = pending(id), l = laneOf(id); if (S.T0 == null || p < 0) return;
+  pushUndo();
+  for (let r = p; r < nb(); r++) if (!S.res[id][r]) S.res[id][r] = { t: null, st: 'non_faite' };
+  S.laneOrder[l] = S.laneOrder[l].filter(x => x !== id);
+  const r0 = nextCycle();
+  S.laneOrder[l].forEach((sid, idx) => { for (let r = r0; r < nb(); r++) S.order[sid][r] = idx + 1; });
+  moveToEnd(id); display[l] = [...S.queue[l]]; touched(); save(); checkFinish();
+}
+// Ajout d'un nageur (avant le départ), pris dans la liste Nageurs du Sheet, tous groupes : il part en dernier dans sa ligne.
+// Pas de cible (aucune référence pour lui dans cette série) ; dans une série spé, il nage sa spé.
+function addSwimmer(id, l) {
+  const n = (PLAN && PLAN.nageurs || []).find(x => String(x.id_nageur) === id);
+  if (S.T0 != null || !n || laneOf(id) >= 0) return;
+  pushUndo();
+  [S.lanes, S.laneOrder, S.queue].forEach(t => t[l].push(id));
+  S.order[id] = Array(nb()).fill(S.laneOrder[l].length);
+  S.res[id] = Array(nb()).fill(null);
+  S.info[id] = { nom: String(n.nom), prenom: String(n.prenom) };
+  S.names[id] = n.prenom ? `${n.prenom} ${String(n.nom).charAt(0)}.` : String(n.nom);
+  const nagesSerie = [...new Set(Object.values(S.cfg.nages || {}).filter(Boolean))];
+  const spe = String(n.spe || '').split(/[;,\/]/)[0].trim();
+  S.cfg.nages = Object.assign(S.cfg.nages || {}, { [id]: nagesSerie.length > 1 ? spe : (nagesSerie[0] || S.cfg.nage) });
+  S.cfg.perLane = Math.max(...S.lanes.map(x => x.length));
+  S.absents = (S.absents || []).filter(x => x !== id);
+  syncDisplay(); save();
+}
+function openAdd() {
+  const actif = n => n.actif !== false && String(n.actif).toUpperCase() !== 'FALSE';
+  const libres = (PLAN && PLAN.nageurs || []).filter(n => actif(n) && laneOf(String(n.id_nageur)) < 0);
+  const groupes = [...new Set(libres.map(n => String(n.groupe)))].sort((a, b) => (a === S.cfg.groupe) - (b === S.cfg.groupe) || a.localeCompare(b));
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Ajouter un nageur">
+    <h2>Ajouter un nageur</h2>
+    ${libres.length ? `<div class="field"><label for="a-id">Nageur</label><select id="a-id">${groupes.map(g => `<optgroup label="${esc(g)}">${libres.filter(n => String(n.groupe) === g)
+      .sort((a, b) => String(a.prenom).localeCompare(String(b.prenom))).map(n => `<option value="${esc(n.id_nageur)}">${esc(n.prenom)} ${esc(n.nom)}</option>`).join('')}</optgroup>`).join('')}</select></div>
+    <div class="row">${S.lanes.map((_, k) => `<button class="btn go" data-add="${k}">→ Ligne ${laneLabel(k)}</button>`).join('')}</div>
+    <p class="note">Il part en dernier dans la ligne choisie, sans temps cible. Appui long sur sa tuile pour le déplacer.</p>`
+    : '<p class="note">Aucun autre nageur dans la liste. Recharge depuis le Sheet si besoin.</p>'}
+    <button class="btn big" id="a-close">Fermer</button>
+  </div></div>`;
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+  $('#a-close').onclick = closeLayer;
+  $('#layer').querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+    const id = $('#a-id').value, l = +b.dataset.add;
+    addSwimmer(id, l); closeLayer(); renderChrono(); toast(`${S.names[id]} ajouté · ligne ${laneLabel(l)}`);
+  });
 }
 function leadRep() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
 
@@ -572,7 +631,7 @@ function renderChrono() {
       <div class="rep num" id="rep"></div>
       ${S.cfg.essai ? '<span class="tag-essai">Essai · nageurs fictifs</span>' : ''}
       <div class="spacer"></div>
-      ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button><button class="btn" id="home">Accueil</button>` : `<button class="btn danger" id="end">Terminer</button>`}
+      ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button>${!S.cfg.essai && PLAN ? '<button class="btn" id="add">+ Nageur</button>' : ''}<button class="btn" id="home">Accueil</button>` : `<button class="btn danger" id="end">Terminer</button>`}
       <button class="btn undo" id="undo">↶ Annuler</button>
       <button class="btn" id="recap">Récap</button>
     </div>
@@ -583,6 +642,7 @@ function renderChrono() {
   if (S.T0 == null) {
     $('#go').onclick = () => { pushUndo(); S.T0 = Date.now(); save(); keepAwake(); renderChrono(); };
     $('#home').onclick = () => { view = 'setup'; render(); };
+    if ($('#add')) $('#add').onclick = openAdd;
   } else armed($('#end'), 'Confirmer la fin', () => finishSeries(true));
   $('#undo').onclick = undo;
   $('#recap').onclick = () => { view = 'recap'; render(); };
@@ -724,13 +784,14 @@ function openMenu(id) {
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Actions pour ${esc(S.names[id])}">
     <h2>${esc(S.names[id])} · ligne ${laneLabel(l)}</h2>
-    ${p >= 0 ? `<div class="row">
+    ${S.T0 == null ? `<button class="btn danger" id="m-abs">Absent (retiré de la série)</button>` : p >= 0 ? `<div class="row">
       <button class="btn" id="m-miss">Manqué (rép. ${p + 1})</button>
       <button class="btn" id="m-nf">Non faite (rép. ${p + 1})</button>
-    </div>` : '<p class="note">Série terminée pour ce nageur.</p>'}
+    </div>
+    <button class="btn danger" id="m-out">Sort de l'eau (rép. ${p + 1} à ${nb()} non faites)</button>` : '<p class="note">Série terminée pour ce nageur.</p>'}
     ${lastOk >= 0 ? `<button class="btn" id="m-cb">Coups de bras (rép. ${lastOk + 1})</button>` : ''}
     <button class="btn" id="m-fix">Corriger un temps…</button>
-    <h2>Ordre de départ</h2>
+    ${p >= 0 ? `<h2>Ordre de départ</h2>
     <div class="order" id="m-order">${orderHtml()}</div>
     <div class="row">
       <button class="btn" id="m-up">← Part plus tôt</button>
@@ -739,12 +800,14 @@ function openMenu(id) {
     <p class="note" id="m-info">Le nouvel ordre s'applique à partir de la rép. ${nextCycle() + 1}.</p>
     ${S.lanes.length > 1 ? `<h2>Changer de ligne</h2>
     <div class="row">${S.lanes.map((_, k) => k === l ? '' : `<button class="btn" data-lane="${k}">→ Ligne ${laneLabel(k)}</button>`).join('')}</div>
-    <p class="note">Il part en dernier dans sa nouvelle ligne, à partir de la rép. ${nextCycle() + 1}.</p>` : ''}
+    <p class="note">Il part en dernier dans sa nouvelle ligne, à partir de la rép. ${nextCycle() + 1}.</p>` : ''}` : ''}
     <button class="btn big" id="m-close">Fermer</button>
   </div></div>`;
   $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
   $('#m-close').onclick = closeLayer;
-  if (p >= 0) {
+  if (S.T0 == null) armed($('#m-abs'), 'Confirmer : absent', () => { markAbsent(id); closeLayer(); buildGrid(); toast(`${S.names[id]} absent · ↶ Annuler pour le remettre`); });
+  else if (p >= 0) {
+    armed($('#m-out'), "Confirmer : sort de l'eau", () => { withdraw(id); closeLayer(); buildGrid(); toast(`${S.names[id]} sorti de l'eau`); });
     $('#m-miss').onclick = () => { markPending(id, 'manque'); closeLayer(); buildGrid(); };
     $('#m-nf').onclick = () => { markPending(id, 'non_faite'); closeLayer(); buildGrid(); };
   }
@@ -756,8 +819,7 @@ function openMenu(id) {
     $('#m-info').textContent = from >= nb() ? 'Plus de répétition à venir : rien ne change.' : `Nouvel ordre appliqué à partir de la rép. ${from + 1}.`;
     buildGrid();
   };
-  $('#m-up').onclick = () => mv(-1);
-  $('#m-down').onclick = () => mv(1);
+  if (p >= 0) { $('#m-up').onclick = () => mv(-1); $('#m-down').onclick = () => mv(1); }
   $('#layer').querySelectorAll('[data-lane]').forEach(b => b.onclick = () => {
     const r0 = moveToLane(id, +b.dataset.lane); if (r0 == null) return;
     buildGrid(); toast(`${S.names[id]} → ligne ${laneLabel(+b.dataset.lane)}` + (r0 < nb() ? ` dès la rép. ${r0 + 1}` : ''));
@@ -861,6 +923,7 @@ function renderRecap() {
     <div class="bar"><h1>${S.done ? 'Série terminée' : 'Récap en cours'} · ${S.cfg.nbRep} × ${S.cfg.distance}</h1><div class="spacer"></div>
       ${S.done ? `<button class="btn go" id="home">Accueil</button>` : `<button class="btn go" id="back">Retour au chrono</button>`}</div>
     ${S.done ? `<p class="note">${fmtDate(S.endedAt)} · départ ${fmtCycle(S.cfg.cycle)} · vagues ${S.cfg.vague}". Rangée dans l'historique.</p>` : ''}
+    ${(S.absents || []).length ? `<p class="note">Absents (non envoyés au Sheet) : ${S.absents.map(id => esc(S.names[id])).join(', ')}</p>` : ''}
     <p class="note">Touche une case pour corriger un temps. « manqué » : case vide, aucun temps inventé.</p>
     <div class="tablewrap"><table>
       <thead><tr><th>Nageur</th>${reps.map(r => `<th>Rép. ${r + 1}${isCounted(r) ? ' · CB' : ''}</th>`).join('')}<th>Moy. · CB</th><th>RPE</th></tr></thead>
