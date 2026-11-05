@@ -391,7 +391,7 @@ function cbTarget(id) {
   return r >= 0 && S.res[id][r].st === 'ok' && isCounted(r) && !cbComplete(id, r) ? r : null;
 }
 
-function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, T0: S.T0 }); }
+function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0 }); }
 function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 300) undoStack.shift(); }
 function undo() {
   const s = undoStack.pop(); if (!s) return;
@@ -457,6 +457,17 @@ function moveInOrder(id, dir) {
   arr.forEach((sid, idx) => { for (let r = from; r < nb(); r++) S.order[sid][r] = idx + 1; });
   if (S.T0 == null) { S.queue[l] = [...arr]; display[l] = [...arr]; }
   save(); return from;
+}
+// Change un nageur de ligne d'eau : il part en dernier dans sa nouvelle ligne, à partir de la répétition suivante.
+// Les têtes de ligne partent toutes ensemble, donc seul l'ordre dans la ligne compte pour son départ.
+function moveToLane(id, to) {
+  const from = laneOf(id);
+  if (to === from || to < 0 || to >= S.lanes.length) return null;
+  pushUndo();
+  [S.lanes, S.laneOrder, S.queue].forEach(t => { t[from] = t[from].filter(x => x !== id); t[to].push(id); });
+  const r0 = nextCycle();
+  [from, to].forEach(l => S.laneOrder[l].forEach((sid, idx) => { for (let r = r0; r < nb(); r++) S.order[sid][r] = idx + 1; }));
+  syncDisplay(); save(); return r0;
 }
 function leadRep() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
 
@@ -633,7 +644,7 @@ function buildGrid() {
   order.forEach(l => {
     const ids = display[l];
     const lane = document.createElement('div'); lane.className = 'lane' + (bout ? ' bout' : '');
-    lane.innerHTML = `<div class="lane-tag">${bout ? 'L' : ''}${laneLabel(l)}</div><div class="tiles" style="${bout ? 'grid-template-rows' : 'grid-template-columns'}: repeat(${ids.length}, minmax(0, 1fr))"></div>`;
+    lane.innerHTML = `<div class="lane-tag">${bout ? 'L' : ''}${laneLabel(l)}</div><div class="tiles" style="${bout ? 'grid-template-rows' : 'grid-template-columns'}: repeat(${Math.max(1, ids.length)}, minmax(0, 1fr))"></div>`;
     const tiles = lane.querySelector('.tiles');
     ids.forEach(id => {
       const el = document.createElement('div'); el.className = 'tile';
@@ -726,6 +737,9 @@ function openMenu(id) {
       <button class="btn" id="m-down">Part plus tard →</button>
     </div>
     <p class="note" id="m-info">Le nouvel ordre s'applique à partir de la rép. ${nextCycle() + 1}.</p>
+    ${S.lanes.length > 1 ? `<h2>Changer de ligne</h2>
+    <div class="row">${S.lanes.map((_, k) => k === l ? '' : `<button class="btn" data-lane="${k}">→ Ligne ${laneLabel(k)}</button>`).join('')}</div>
+    <p class="note">Il part en dernier dans sa nouvelle ligne, à partir de la rép. ${nextCycle() + 1}.</p>` : ''}
     <button class="btn big" id="m-close">Fermer</button>
   </div></div>`;
   $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
@@ -744,6 +758,11 @@ function openMenu(id) {
   };
   $('#m-up').onclick = () => mv(-1);
   $('#m-down').onclick = () => mv(1);
+  $('#layer').querySelectorAll('[data-lane]').forEach(b => b.onclick = () => {
+    const r0 = moveToLane(id, +b.dataset.lane); if (r0 == null) return;
+    buildGrid(); toast(`${S.names[id]} → ligne ${laneLabel(+b.dataset.lane)}` + (r0 < nb() ? ` dès la rép. ${r0 + 1}` : ''));
+    openMenu(id);
+  });
 }
 
 function openFix(id, r) {
