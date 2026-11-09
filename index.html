@@ -107,6 +107,9 @@ details.essai > * + * { margin-top: 12px; }
 .lanes.dense .tile .badge { font-size: 9px; padding: 1px 4px; top: 3px; right: 3px; }
 .tile.wait { background: var(--wait); border-style: dashed; }
 .tile.wait .time { font-size: clamp(12px, min(22cqh, 13cqw), 24px); color: var(--muted); }
+/* Au repos : le temps nagé reste lisible de loin */
+.tile.wait.rest .time { font-size: clamp(14px, min(32cqh, 20cqw), 44px); color: var(--ink); }
+.tile.wait.rest .meta { color: var(--ink); }
 .tile.hot { background: var(--hot); border-color: var(--hot-ink); color: var(--hot-ink); }
 /* 3 dernières secondes avant le départ du nageur : rouge plein, pour le lancer */
 .tile.wait.go { background: var(--start); border: 3px solid var(--start); color: var(--start-ink); }
@@ -371,6 +374,20 @@ async function envoyer(liste) {
   }
   return n;
 }
+// Envoi automatique dès qu'il y a du réseau : fin de série, ouverture de l'app, retour du wifi, retour à l'accueil.
+let envoiEnCours = false;
+async function autoEnvoi() {
+  if (envoiEnCours || !getLS(KEY_SECRET) || navigator.onLine === false || !aEnvoyer().length) return;
+  envoiEnCours = true;
+  try {
+    const n = await envoyer(aEnvoyer());
+    if (n) { toast(`✓ ${n} série${n > 1 ? 's' : ''} envoyée${n > 1 ? 's' : ''} au Sheet`); if (view !== 'chrono') render(); }
+  } catch (e) { /* pas de réseau ou Sheet injoignable : on réessaiera au prochain déclencheur */ }
+  envoiEnCours = false;
+}
+window.addEventListener('online', autoEnvoi);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoEnvoi(); });
+
 // Une correction après envoi : la série repasse « à envoyer » (le renvoi remplace ses lignes dans le Sheet)
 function touched() { if (S && S.done && S.sentAt) S.sentAt = null; }
 
@@ -445,6 +462,7 @@ function finishSeries(manual) {
   save(); undoStack = []; clearTimeout(finishTimer);
   try { if (wakeLock) wakeLock.release(); } catch (e) {}
   closeLayer(); view = 'recap'; render(); toast("Série terminée · rangée dans l'historique");
+  setTimeout(autoEnvoi, 1500);
 }
 function setResult(id, r, val) { pushUndo(); S.res[id][r] = val; touched(); save(); }
 function nextCycle() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
@@ -540,6 +558,20 @@ document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preven
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && view === 'chrono' && S && S.T0) keepAwake(); });
 
 // ---------- Écran Préparation ----------
+let chargement = false, echecChargement = 0;
+async function autoChargement(demande) {
+  if (chargement) return;
+  if (!demande && Date.now() - echecChargement < 60000) return; // pas de boucle si le réseau ne répond pas
+  chargement = true; if (view === 'setup') render();
+  try { await chargerSheet(); if (demande) toast('Séries et nageurs à jour'); }
+  catch (e) {
+    echecChargement = Date.now();
+    if (demande || /secret/i.test(e.message)) toast(e.message);
+    if (/secret/i.test(e.message) && /refus/i.test(e.message)) setLS(KEY_SECRET, '');
+  }
+  chargement = false; if (view === 'setup') render();
+}
+
 function renderSetup() {
   const live = load();
   const saved = live && live.T0 != null;
@@ -558,10 +590,18 @@ function renderSetup() {
 
     <h2>Séries prêtes</h2>
     ${secret ? `
-      <div class="actions"><button class="btn" id="load">Charger depuis le Sheet</button></div>
-      <p class="note">${PLAN ? `Chargé le ${fmtDate(PLAN.loadedAt)} · ${(PLAN.nageurs || []).length} nageurs.` : 'Charge les séries avec du réseau (la veille ou au vestiaire).'}</p>
-      ${sp.length ? `<div class="hist">${sp.map(x => `<button class="hist-item plan-item" data-id="${esc(x.id)}"><b>${esc(x.f.groupe)} · ${x.f.nb_rep} × ${x.f.distance} ${esc(nagesSerie(x.rows))} · départ ${fmtCycle(+x.f.cycle_s)} · vagues ${x.f.vague_s}" · ${x.rows.length} nageurs</b><span>${fmtJour(x.f.date_prevue)}</span></button>`).join('')}</div>`
-        : PLAN ? '<p class="note">Aucune série dans l\'onglet Series_pretes.</p>' : ''}`
+      ${(() => {
+        // Séries du jour et à venir d'abord ; les passées repliées
+        const jour = new Date(); jour.setHours(0, 0, 0, 0);
+        const quand = x => { const d = new Date(x.f.date_prevue); return isNaN(d) ? jour : d; };
+        const bouton = x => `<button class="hist-item plan-item" data-id="${esc(x.id)}"><b>${esc(x.f.groupe)} · ${x.f.nb_rep} × ${x.f.distance} ${esc(nagesSerie(x.rows))} · départ ${fmtCycle(+x.f.cycle_s)} · vagues ${x.f.vague_s}" · ${x.rows.length} nageurs</b><span>${fmtJour(x.f.date_prevue)}</span></button>`;
+        const tri = sp.slice().sort((a, b) => quand(a) - quand(b));
+        const venir = tri.filter(x => quand(x) >= jour), passees = tri.filter(x => quand(x) < jour).reverse();
+        return (venir.length ? `<div class="hist">${venir.map(bouton).join('')}</div>` : PLAN ? '<p class="note">Aucune série prévue aujourd\'hui ou plus tard.</p>' : '')
+          + (passees.length ? `<details class="essai"><summary>Séries passées (${passees.length})</summary><div class="hist">${passees.map(bouton).join('')}</div></details>` : '');
+      })()}
+      <p class="note">${chargement ? 'Chargement des séries…' : PLAN ? `Mis à jour le ${fmtDate(PLAN.loadedAt)} · ${(PLAN.nageurs || []).length} nageurs.` : 'Les séries se chargent dès qu\'il y a du réseau (la veille ou au vestiaire).'}
+        <button class="btn" id="load" style="min-height:40px;padding:6px 12px;margin-left:8px">Actualiser</button></p>`
     : `<p class="note">Code secret du Sheet, à saisir une seule fois sur cet appareil.</p>
       <div class="actions"><input id="f-secret" type="password" autocomplete="off" style="border:2px solid var(--line);border-radius:8px;padding:10px;min-height:48px;-webkit-user-select:text;user-select:text" aria-label="Code secret"><button class="btn go" id="save-secret">Enregistrer</button></div>`}
 
@@ -598,12 +638,9 @@ function renderSetup() {
     const v = $('#f-secret').value.trim(); if (!v) { toast('Saisis le code secret du Sheet'); return; }
     setLS(KEY_SECRET, v); render(); toast('Code secret enregistré sur cet appareil');
   };
-  if ($('#load')) $('#load').onclick = async () => {
-    const b = $('#load'); b.disabled = true; b.textContent = 'Chargement…';
-    try { await chargerSheet(); toast('Séries et nageurs chargés'); }
-    catch (e) { toast(e.message); if (/secret/i.test(e.message) && /refus/i.test(e.message)) setLS(KEY_SECRET, ''); }
-    render();
-  };
+  if ($('#load')) $('#load').onclick = () => autoChargement(true);
+  // À l'ouverture de l'accueil, avec du réseau : mise à jour seule si le dernier chargement date de plus de 5 min
+  if (secret && !chargement && navigator.onLine !== false && (!PLAN || Date.now() - PLAN.loadedAt > 5 * 60000)) autoChargement(false);
   if ($('#send-all')) $('#send-all').onclick = async () => {
     const b = $('#send-all'); b.disabled = true; b.textContent = 'Envoi…';
     try { const n = await envoyer(aEnvoyer()); toast(`${n} série${n > 1 ? 's' : ''} envoyée${n > 1 ? 's' : ''} au Sheet`); }
@@ -631,9 +668,9 @@ function renderChrono() {
       <div class="rep num" id="rep"></div>
       ${S.cfg.essai ? '<span class="tag-essai">Essai · nageurs fictifs</span>' : ''}
       <div class="spacer"></div>
-      ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button>${!S.cfg.essai && PLAN ? '<button class="btn" id="add">+ Nageur</button>' : ''}<button class="btn" id="home">Accueil</button>` : `<button class="btn danger" id="end">Terminer</button>`}
-      <button class="btn undo" id="undo">↶ Annuler</button>
+      ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button>${!S.cfg.essai && PLAN ? '<button class="btn" id="add">+ Nageur</button>' : ''}<button class="btn" id="home">Accueil</button>` : ''}
       <button class="btn" id="recap">Récap</button>
+      <button class="btn big undo" id="undo">↶ Annuler</button>
     </div>
     <div class="lanes ${c.perLane > 4 ? 'dense' : ''}" id="lanes" style="${isBout() ? 'grid-template-columns' : 'grid-template-rows'}: repeat(${c.lanes}, minmax(0, 1fr))"></div>
     <div id="padbox"></div>
@@ -643,7 +680,7 @@ function renderChrono() {
     $('#go').onclick = () => { pushUndo(); S.T0 = Date.now(); save(); keepAwake(); renderChrono(); };
     $('#home').onclick = () => { view = 'setup'; render(); };
     if ($('#add')) $('#add').onclick = openAdd;
-  } else armed($('#end'), 'Confirmer la fin', () => finishSeries(true));
+  } // « Terminer » est dans le Récap : loin d'« Annuler », qui sert sans cesse
   $('#undo').onclick = undo;
   $('#recap').onclick = () => { view = 'recap'; render(); };
   buildGrid(); tick();
@@ -754,13 +791,20 @@ function tick() {
     const last = r.slice().reverse().find(x => x && x.st === 'ok');
     const autoMiss = r.some(x => x && x.auto);
     let cls = 'tile', time = '', meta = '';
-    if (p < 0) { cls += ' done'; time = 'Fini'; meta = last ? `dernier ${fmt(last.t)}` : ''; }
+    if (p < 0) { cls += ' done'; time = last ? fmt(last.t) : 'Fini'; meta = 'série finie'; }
     else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][0]}ᵉ départ`; meta = `rép. 1 / ${nb()}`; }
     else {
       const d = dep(id, p);
-      if (now < d) { cls += ' wait' + (d - now <= 3000 ? ' go' : ''); time = `Départ ${Math.ceil((d - now) / 1000)}"`; }
-      else { time = fmt((now - d) / 1000, 1); if (now >= expected(id, p) - HOT_BEFORE_MS) cls += ' hot'; }
       meta = `rép. ${p + 1} / ${nb()}` + (last ? ` · ${fmt(last.t)}` : '');
+      if (now < d) {
+        // Au repos : le temps qu'il vient de nager en gros (le nageur le demande), le décompte en petit ;
+        // les 3 dernières secondes, le décompte repasse en gros pour le lancer.
+        const reste = Math.ceil((d - now) / 1000), prev = p > 0 ? r[p - 1] : null;
+        cls += ' wait' + (d - now <= 3000 ? ' go' : '');
+        if (d - now > 3000 && prev && prev.st === 'ok') { cls += ' rest'; time = fmt(prev.t); meta = `départ dans ${reste}" · rép. ${p + 1} / ${nb()}`; }
+        else time = `Départ ${reste}"`;
+      }
+      else { time = fmt((now - d) / 1000, 1); if (now >= expected(id, p) - HOT_BEFORE_MS) cls += ' hot'; }
     }
     if (S.T0 != null && cbTarget(id) != null) { cls += ' cb'; meta = 'CB à noter' + (meta ? ' · ' + meta : ''); }
     if (el.classList.contains('pressing')) cls += ' pressing';
@@ -942,7 +986,7 @@ function renderRecap() {
   };
   $('#rpe-all').onclick = () => { const ids = S.lanes.flat(); openRpe(ids.find(id => rpeOf(id) == null) || ids[0], true); };
   if (S.done) {
-    $('#home').onclick = () => { S = null; view = 'setup'; render(); };
+    $('#home').onclick = () => { S = null; view = 'setup'; render(); autoEnvoi(); };
     armed($('#del'), 'Confirmer : supprimer', () => {
       HIST = HIST.filter(h => h.uid !== S.uid);
       try { localStorage.setItem(KEY_HIST, JSON.stringify(HIST)); } catch (e) {}
@@ -965,6 +1009,7 @@ HIST = loadHist();
 S = load();
 if (S && S.T0 != null) { syncDisplay(); view = 'chrono'; } else S = null;
 render();
+autoEnvoi();
 </script>
 <script>
 // Hors ligne : le service worker garde l'app sur l'appareil après la première ouverture.
