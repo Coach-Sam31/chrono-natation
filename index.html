@@ -139,7 +139,11 @@ td.rpe-cell { text-align: center; font-size: 18px; }
 .todo { color: var(--warn); font-size: 13px; font-weight: 600; }
 td.cb-missing .cbline { color: var(--warn); }
 .tile.flash { animation: flash .35s; }
-.tile.tapped { border-color: var(--lane); }
+.tile.tapped { border-color: var(--lane); background: var(--lane); color: var(--lane-ink); transition: none; }
+.tile.tapped .meta, .tile.tapped .time { color: var(--lane-ink); }
+.bar.trot { gap: 8px; }
+.bar.trot .btn { min-height: 44px; padding: 8px 14px; }
+#trot-info { font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--ink); }
 .tile .badge { position: absolute; top: 6px; right: 6px; background: var(--warn); color: #fff; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 2px 6px; }
 .tile::after { content: ""; position: absolute; left: 0; bottom: 0; height: 6px; width: 0; background: var(--lane); }
 .tile.pressing::after { width: 100%; transition: width .9s linear; }
@@ -284,6 +288,7 @@ function newSeries(cfg) {
 function buildSeries(cfg, lanes, names, info) {
   const order = {}, res = {};
   lanes.forEach(ids => ids.forEach((id, i) => { order[id] = Array(cfg.nbRep).fill(i + 1); res[id] = Array(cfg.nbRep).fill(null); }));
+  departPrevu = null;
   S = { uid: Date.now(), cfg, names, info, lanes, laneOrder: lanes.map(l => [...l]), queue: lanes.map(l => [...l]), order, res, T0: null };
   syncDisplay(); undoStack = []; save();
 }
@@ -436,7 +441,8 @@ function tap(id, t) {
   while (p + 1 < nb() && t >= dep(id, p + 1)) { S.res[id][p] = { t: null, st: 'manque', auto: true }; p++; }
   S.res[id][p] = { t: (t - dep(id, p)) / 1000, st: 'ok' };
   moveToEnd(id); save(); scheduleDisplay(laneOf(id)); checkFinish();
-  const el = tileEls[id]; if (el) { el.classList.add('tapped'); setTimeout(() => el.classList.remove('tapped'), 400); }
+  const el = tileEls[id]; if (el) { el.classList.add('tapped'); setTimeout(() => el.classList.remove('tapped'), 600); }
+  bip(1000, 0.07);
 }
 function flash(id) { const el = tileEls[id]; if (!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
 
@@ -548,6 +554,36 @@ function openAdd() {
 }
 function leadRep() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
 
+// ---------- Départ calé sur la trotteuse du bassin ----------
+// On touche « Caler » quand l'aiguille passe au 60 : l'app retient ce calage (phase dans la minute) sur l'appareil.
+// Ensuite « Au prochain 60 / 30 » programme le départ : décompte, bips 3-2-1, et le chrono part tout seul.
+const KEY_TROT = 'chrono-trotteuse';
+let departPrevu = null, dernierBip = null;
+function phaseTrotteuse() { const v = getLS(KEY_TROT); return v === null || v === '' ? null : Number(v); }
+function calerTrotteuse() { setLS(KEY_TROT, String(Date.now() % 60000)); }
+function prochainTop(periode) {
+  const now = Date.now(), ph = phaseTrotteuse() % periode;
+  let t = now + (((ph - now % periode) % periode) + periode) % periode;
+  if (t - now < 3000) t += periode; // trop juste pour se placer : top suivant
+  return t;
+}
+function lancerDepart(t0) { pushUndo(); S.T0 = t0; save(); keepAwake(); bip(1500, 0.35); renderChrono(); }
+
+// ---------- Signal sonore (au tap, aux départs) ----------
+const KEY_SON = 'chrono-son';
+let audio = null;
+function sonActif() { return getLS(KEY_SON) !== '0'; }
+function bip(freq = 1000, duree = 0.07) {
+  if (!sonActif()) return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = freq; g.gain.value = 0.25;
+    o.connect(g); g.connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + duree);
+  } catch (e) {}
+}
+
 async function keepAwake() {
   try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
 }
@@ -578,7 +614,7 @@ function renderSetup() {
   // Le formulaire d'essai ne reprend que les réglages d'un essai précédent, jamais ceux d'une vraie série (sinon on les confond).
   const lastEssai = [live, ...HIST].find(h => h && h.cfg.essai);
   const c = Object.assign({ distance: 100, nbRep: 8, cycle: 100, vague: 10, lanes: 3, perLane: 4, bassin: 25 }, lastEssai ? lastEssai.cfg : {});
-  c.view = ((live || HIST[0] || {}).cfg || {}).view || 'cote-haut';
+  c.view = getLS('chrono-vue') || ((live || HIST[0] || {}).cfg || {}).view || 'cote-haut';
   const cbDefault = c.countReps ? c.countReps.join(';') : [...new Set([1, Math.ceil(c.nbRep / 2), c.nbRep])].join(';');
   const VIEWS = [['cote-haut', 'Côté du bassin · ligne 1 en haut'], ['cote-bas', 'Côté du bassin · ligne 1 en bas'], ['bout-gauche', 'Bout du bassin · ligne 1 à gauche'], ['bout-droite', 'Bout du bassin · ligne 1 à droite']];
   const secret = getLS(KEY_SECRET), sp = seriesPretes(), pend = aEnvoyer();
@@ -586,8 +622,6 @@ function renderSetup() {
   <div class="view"><div class="scroll"><div class="panel">
     <h1>Chrono multi-nageurs</h1>
     ${saved ? `<div class="actions"><button class="btn go big" id="resume">Reprendre : ${live.cfg.essai ? 'essai (nageurs fictifs)' : esc(live.cfg.groupe)} · ${live.cfg.nbRep} × ${live.cfg.distance}</button></div>` : ''}
-    <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-
     <h2>Séries prêtes</h2>
     ${secret ? `
       ${(() => {
@@ -629,8 +663,18 @@ function renderSetup() {
     <h2>Historique</h2>
     ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.essai ? 'Essai' : esc(h.cfg.groupe)} · ${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)} · ${h.cfg.essai ? 'essai' : h.sentAt ? 'envoyée ✓' : 'à envoyer'}</span></button>`).join('')}</div>`
       : `<p class="note">Les séries terminées arrivent ici. Tu pourras encore y corriger les temps.</p>`}
+
+    <details class="essai"><summary>Réglages</summary>
+      <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="actions"><button class="btn" id="f-son">${sonActif() ? '🔊 Son au tap : activé' : '🔇 Son au tap : coupé'}</button>
+        ${secret ? '<button class="btn" id="f-oubli">Changer le code secret</button>' : ''}</div>
+      <p class="note">Trotteuse : ${phaseTrotteuse() == null ? 'pas encore calée (bouton « Caler » avant le départ d\'une série).' : 'calée sur cet appareil. Recale-la si tu changes de bassin ou si l\'horloge a été réglée.'}</p>
+    </details>
   </div></div></div>`;
   const viewNow = () => $('#f-view').value;
+  $('#f-view').onchange = () => setLS('chrono-vue', $('#f-view').value);
+  $('#f-son').onclick = () => { setLS(KEY_SON, sonActif() ? '0' : '1'); bip(1000, 0.07); render(); };
+  if ($('#f-oubli')) armed($('#f-oubli'), 'Confirmer : saisir un nouveau code', () => { setLS(KEY_SECRET, ''); render(); });
   if (saved) $('#resume').onclick = () => { S = live; syncDisplay(); undoStack = []; view = 'chrono'; keepAwake(); render(); };
   $('#app').querySelectorAll('.hist-item[data-i]').forEach(b => b.onclick = () => { S = HIST[+b.dataset.i]; view = 'recap'; render(); });
   $('#app').querySelectorAll('.plan-item').forEach(b => b.onclick = () => { startPlanned(b.dataset.id, viewNow()); view = 'chrono'; render(); });
@@ -672,12 +716,22 @@ function renderChrono() {
       <button class="btn" id="recap">Récap</button>
       <button class="btn big undo" id="undo">↶ Annuler</button>
     </div>
+    ${S.T0 == null ? `<div class="bar trot">
+      <span class="note" id="trot-info"></span><div class="spacer"></div>
+      ${phaseTrotteuse() != null ? `<button class="btn go" id="t60">Au prochain 60</button><button class="btn" id="t30">Au prochain 30</button>` : ''}
+      ${departPrevu ? `<button class="btn danger" id="tstop">Annuler le départ programmé</button>` : ''}
+      <button class="btn" id="tcal">${phaseTrotteuse() != null ? '⟲ Recaler' : 'Caler sur la trotteuse'}</button>
+    </div>` : ''}
     <div class="lanes ${c.perLane > 4 ? 'dense' : ''}" id="lanes" style="${isBout() ? 'grid-template-columns' : 'grid-template-rows'}: repeat(${c.lanes}, minmax(0, 1fr))"></div>
     <div id="padbox"></div>
   </div>`;
   pad = null;
   if (S.T0 == null) {
-    $('#go').onclick = () => { pushUndo(); S.T0 = Date.now(); save(); keepAwake(); renderChrono(); };
+    $('#go').onclick = () => { departPrevu = null; lancerDepart(Date.now()); };
+    $('#tcal').onclick = () => { calerTrotteuse(); bip(1200, 0.12); toast('Trotteuse calée : touche au passage du 60, c\'est fait'); renderChrono(); };
+    if ($('#t60')) $('#t60').onclick = () => { departPrevu = prochainTop(60000); renderChrono(); };
+    if ($('#t30')) $('#t30').onclick = () => { departPrevu = prochainTop(30000); renderChrono(); };
+    if ($('#tstop')) $('#tstop').onclick = () => { departPrevu = null; renderChrono(); };
     $('#home').onclick = () => { view = 'setup'; render(); };
     if ($('#add')) $('#add').onclick = openAdd;
   } // « Terminer » est dans le Récap : loin d'« Annuler », qui sert sans cesse
@@ -782,6 +836,19 @@ function tick() {
   if (view !== 'chrono' || !S) return;
   const now = Date.now();
   const clock = $('#clock'), rep = $('#rep');
+  // Départ programmé sur la trotteuse : décompte, bips 3-2-1, départ automatique pile au top
+  if (S.T0 == null) {
+    const info = $('#trot-info');
+    if (departPrevu) {
+      const reste = Math.ceil((departPrevu - now) / 1000);
+      if (reste <= 3 && reste >= 1 && dernierBip !== reste) { dernierBip = reste; bip(800, 0.12); }
+      if (now >= departPrevu) { const t0 = departPrevu; departPrevu = null; dernierBip = null; lancerDepart(t0); return; }
+      if (info) info.textContent = `Départ dans ${reste}"`;
+    } else if (info) {
+      const ph = phaseTrotteuse();
+      info.textContent = ph == null ? 'Départ au top de la trotteuse : cale-la d\'abord' : `Prochain 60 dans ${Math.ceil((prochainTop(60000) - now) / 1000)}"`;
+    }
+  }
   const finished = S.T0 != null && allDone();
   if (clock) clock.textContent = S.T0 == null ? '00:00' : finished ? 'Fini' : fmtClock(now - S.T0);
   if (rep) rep.innerHTML = S.T0 == null ? `${S.cfg.nbRep} × ${S.cfg.distance} · départ ${fmtCycle(S.cfg.cycle)} · vagues ${S.cfg.vague}"`
