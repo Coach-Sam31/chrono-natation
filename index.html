@@ -36,6 +36,15 @@ img { max-width: 100%; }
   --warn: #b93a07;
   --start: #d6141f;
   --start-ink: #ffffff;
+  --wall: #0f2b3d;
+  --wall-ink: #ffffff;
+  --wall-muted: #b9d0dc;
+  --cd: #ffd400;
+  --cd-ink: #1a1600;
+  --nage: #6a2fb5;
+  --nage-ink: #ffffff;
+  --cbq: #0a7d4f;
+  --cbq-ink: #ffffff;
   --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
   --font-body: "Barlow", "Helvetica Neue", Arial, sans-serif;
 }
@@ -43,13 +52,13 @@ img { max-width: 100%; }
   :root:not([data-theme="light"]) {
     --bg: #061118; --surface: #0f2430; --ink: #eaf4f8; --muted: #8fa9b4; --line: #26414e;
     --lane: #4aa3ff; --lane-ink: #04121a; --hot: #ffd400; --hot-ink: #1a1600;
-    --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c; color-scheme: dark;
+    --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c; --nage: #b693ff; --nage-ink: #1a0b33; --cbq: #3ddc97; --cbq-ink: #04121a; --wall: #dfeaf0; --wall-ink: #06202c; --wall-muted: #3d5866; --cd: #ffd400; --cd-ink: #1a1600; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #061118; --surface: #0f2430; --ink: #eaf4f8; --muted: #8fa9b4; --line: #26414e;
   --lane: #4aa3ff; --lane-ink: #04121a; --hot: #ffd400; --hot-ink: #1a1600;
-  --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c; color-scheme: dark;
+  --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c; --nage: #b693ff; --nage-ink: #1a0b33; --cbq: #3ddc97; --cbq-ink: #04121a; --wall: #dfeaf0; --wall-ink: #06202c; --wall-muted: #3d5866; --cd: #ffd400; --cd-ink: #1a1600; color-scheme: dark;
 }
 html, body { height: 100%; }
 body {
@@ -101,15 +110,26 @@ details.essai > * + * { margin-top: 12px; }
   container-type: size; /* le texte se règle sur la taille de la tuile, quelle que soit la vue */
 }
 .tile .name { font-family: var(--font-display); font-weight: 700; font-size: clamp(12px, min(22cqh, 15cqw), 30px); line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-.tile .time { font-family: var(--font-display); font-weight: 700; font-size: clamp(14px, min(32cqh, 20cqw), 44px); line-height: 1.1; white-space: nowrap; }
+.tile .time { font-family: var(--font-display); font-weight: 700; font-size: clamp(14px, min(32cqh, 17cqw), 44px); line-height: 1.1; white-space: nowrap; }
 .tile .meta { font-size: clamp(9px, min(13cqh, 9cqw), 14px); line-height: 1.25; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lanes.dense .tile { padding: 4px 6px; border-width: 2px; border-radius: 10px; }
-.lanes.dense .tile .badge { font-size: 9px; padding: 1px 4px; top: 3px; right: 3px; }
+.lanes.dense .tile .badge { font-size: 9px; padding: 1px 4px; top: 3px; right: calc(var(--sq) + 8px); }
 .tile.wait { background: var(--wait); border-style: dashed; }
 .tile.wait .time { font-size: clamp(12px, min(22cqh, 13cqw), 24px); color: var(--muted); }
 /* Au repos : le temps nagé reste lisible de loin */
-.tile.wait.rest .time { font-size: clamp(14px, min(32cqh, 20cqw), 44px); color: var(--ink); }
-.tile.wait.rest .meta { color: var(--ink); }
+/* Au mur : tuile foncée, temps nagé en gros, très lisible et impossible à confondre avec un nageur dans l'eau */
+.tile.wait.rest { background: var(--wall); border: 3px solid var(--wall); color: var(--wall-ink); }
+.tile.wait.rest .time { font-size: clamp(14px, min(32cqh, 17cqw), 44px); color: var(--wall-ink); }
+.tile.wait.rest .meta { color: var(--wall-muted); }
+/* Dans l'eau : tuile blanche, bord épais couleur de ligne */
+.tile.swim { background: var(--surface); border: 3px solid var(--lane); }
+.tile.swim .meta { color: var(--lane); font-weight: 600; }
+/* Décompte avant départ : toujours la même pastille, au même endroit */
+.tile .cd { align-self: flex-start; background: var(--cd); color: var(--cd-ink); font-family: var(--font-display); font-weight: 700;
+  font-size: clamp(14px, min(24cqh, 14cqw), 34px); line-height: 1.1; border-radius: 8px; padding: 2px 10px; white-space: nowrap; }
+.tile.wait.go .time { font-size: clamp(22px, min(48cqh, 26cqw), 72px); color: var(--start-ink); }
+/* Tap refusé (trop tôt) : éclair orange */
+.tile.refus { background: var(--warn) !important; border-color: var(--warn) !important; color: #fff !important; }
 .tile.hot { background: var(--hot); border-color: var(--hot-ink); color: var(--hot-ink); }
 /* 3 dernières secondes avant le départ du nageur : rouge plein, pour le lancer */
 .tile.wait.go { background: var(--start); border: 3px solid var(--start); color: var(--start-ink); }
@@ -118,6 +138,31 @@ details.essai > * + * { margin-top: 12px; }
 .tile.done { background: var(--done); border-color: var(--done); opacity: .7; }
 .tile.cb { border-color: var(--lane); border-style: solid; }
 .tile.cb .meta { color: var(--lane); font-weight: 600; }
+/* Deux petits carrés au bord droit de la tuile : la nage (violet) et les coups de bras (vert).
+   Ils ne répondent que si le nageur ne nage pas ; pendant qu'il nage, toute la tuile, carrés compris, reste le bouton chrono. */
+.tile { --sq: clamp(24px, min(38cqh, 22cqw), 46px); }
+.tile .name, .tile .time, .tile .meta { padding-right: calc(var(--sq) + 6px); }
+.tile .sqs { position: absolute; top: 5px; right: 5px; bottom: 5px; width: var(--sq); display: flex; flex-direction: column; justify-content: space-between; }
+.lanes.dense .tile .sqs { top: 3px; right: 3px; bottom: 3px; }
+.sq { width: var(--sq); height: var(--sq); max-height: calc(50% - 2px); border-radius: 8px; box-sizing: border-box; display: grid; place-items: center; font-family: var(--font-display); font-weight: 700; line-height: 1; white-space: nowrap; overflow: hidden; }
+.sq.nage { background: var(--nage); color: var(--nage-ink); font-size: calc(var(--sq) * .56); }
+.sq.cbq { background: var(--surface); color: var(--cbq); border: 2px solid var(--cbq); font-size: calc(var(--sq) * .36); }
+.sq.cbq.due { background: var(--cbq); color: var(--cbq-ink); }
+.sq.cbq.off { opacity: .4; }
+.tile.swim .sq { opacity: .45; }
+.tile.wait.pause { border-style: dotted; }
+.nage-keys { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.nage-keys .pad-key { min-height: 76px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.nage-keys .pad-key small { font-family: var(--font-body); font-size: 12px; font-weight: 600; }
+.nage-keys .pad-key.on { background: var(--nage); color: var(--nage-ink); border-color: var(--nage); }
+/* Tuile étroite (iPhone tenu debout, lignes chargées) : les deux carrés passent en bas, côte à côte, à la place de la petite ligne de texte. */
+@container (max-width: 104px) {
+  .tile .name, .tile .time, .tile .meta { padding-right: 0; }
+  .tile .meta { visibility: hidden; height: calc(var(--sq) + 2px); flex-shrink: 0; }
+  .tile .sqs, .lanes.dense .tile .sqs { top: auto; left: 4px; right: 4px; bottom: 4px; width: auto; flex-direction: row; }
+  .sq { max-height: none; }
+  .tile .badge, .lanes.dense .tile .badge { right: 3px; }
+}
 .pad { border: 3px solid var(--lane); background: var(--surface); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .pad-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pad-head b { font-family: var(--font-display); font-size: 24px; }
@@ -144,7 +189,7 @@ td.cb-missing .cbline { color: var(--warn); }
 .bar.trot { gap: 8px; }
 .bar.trot .btn { min-height: 44px; padding: 8px 14px; }
 #trot-info { font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--ink); }
-.tile .badge { position: absolute; top: 6px; right: 6px; background: var(--warn); color: #fff; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 2px 6px; }
+.tile .badge { position: absolute; top: 6px; right: calc(var(--sq) + 11px); background: var(--warn); color: #fff; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 2px 6px; }
 .tile::after { content: ""; position: absolute; left: 0; bottom: 0; height: 6px; width: 0; background: var(--lane); }
 .tile.pressing::after { width: 100%; transition: width .9s linear; }
 @keyframes flash { 0%, 100% { transform: none; } 30% { transform: translateX(-5px); } 70% { transform: translateX(5px); } }
@@ -192,6 +237,7 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
+const APP_VERSION = 'v10';
 const KEY = 'chrono-maquette-v1';
 const KEY_HIST = 'chrono-maquette-historique-v1';
 const NAMES = ['Léa M.', 'Tom B.', 'Inès R.', 'Hugo D.', 'Jade P.', 'Noah L.', 'Manon G.', 'Enzo F.',
@@ -264,7 +310,21 @@ function toast(msg) {
 const nb = () => S.cfg.nbRep;
 const cycleMs = () => S.cfg.cycle * 1000;
 function laneOf(id) { return S.lanes.findIndex(l => l.includes(id)); }
-function dep(id, r) { return S.T0 + r * cycleMs() + (S.order[id][r] - 1) * S.cfg.vague * 1000; }
+// Pauses : un départ prévu après le début d'une pause est repoussé de la durée de cette pause.
+// Tant que la pause dure, il recule avec l'horloge : son décompte reste figé. Les nageurs déjà partis ne sont pas touchés.
+function decale(t) {
+  for (const p of S.pauses || []) if (t >= p.at) t += p.dur;
+  if (S.pause && t >= S.pause.at) t += Date.now() - S.pause.at;
+  return t;
+}
+function dep(id, r) { return decale(S.T0 + r * cycleMs() + (S.order[id][r] - 1) * S.cfg.vague * 1000); }
+// Nombre de répétitions dont la tête de ligne est déjà partie (pauses comprises)
+function repsLancees() {
+  if (S.T0 == null) return 0;
+  const now = Date.now(); let n = 0;
+  for (let r = 0; r < nb(); r++) if (decale(S.T0 + r * cycleMs()) <= now) n++;
+  return n;
+}
 function pending(id) { return S.res[id].findIndex(x => !x); }
 function expected(id, p) {
   const prev = S.res[id].slice(0, p).reverse().find(x => x && x.st === 'ok');
@@ -283,7 +343,7 @@ function newSeries(cfg) {
     for (let i = 0; i < cfg.perLane; i++) { const id = 's' + k; names[id] = NAMES[k++]; ids.push(id); }
     lanes.push(ids);
   }
-  buildSeries(Object.assign({ essai: true }, cfg), lanes, names, {});
+  buildSeries(Object.assign({ essai: true, nage: 'NL' }, cfg), lanes, names, {});
 }
 function buildSeries(cfg, lanes, names, info) {
   const order = {}, res = {};
@@ -360,7 +420,7 @@ function lignesSheet(s) {
   s.lanes.forEach((ids, l) => ids.forEach(id => s.res[id].forEach((x, r) => {
     const cb = cbOf(id, r);
     rows.push({
-      date, groupe: c.groupe, id_serie: c.idSerie, distance: c.distance, nage: (c.nages && c.nages[id]) || c.nage, bassin_m: c.bassin, nb_rep: c.nbRep,
+      date, groupe: c.groupe, id_serie: c.idSerie, distance: c.distance, nage: nageDe(id, r), bassin_m: c.bassin, nb_rep: c.nbRep,
       cycle_s: c.cycle, vague_s: c.vague, ligne: laneLabel(l), ordre: s.order[id][r], id_nageur: id,
       nom: s.info[id].nom, prenom: s.info[id].prenom, rep: r + 1,
       temps_s: x && x.st === 'ok' ? Math.round(x.t * 100) / 100 : '', coups_bras: cb ? cb.map(v => v ?? '').join(';') : '',
@@ -413,11 +473,62 @@ function cbTarget(id) {
   return r >= 0 && S.res[id][r].st === 'ok' && isCounted(r) && !cbComplete(id, r) ? r : null;
 }
 
-function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0, absents: S.absents || [] }); }
-function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 300) undoStack.shift(); }
+// ---------- Nage de chaque nageur : affichée sur sa tuile, modifiable au bord du bassin ----------
+const NAGES = [['NL', 'C', 'Crawl'], ['Dos', 'D', 'Dos'], ['Brasse', 'B', 'Brasse'], ['Pap', 'P', 'Papillon'], ['4N', '4N', '4 nages']];
+function nageDe(id, r) { return (S.nagesRep && S.nagesRep[id] && S.nagesRep[id][r]) || (S.cfg.nages && S.cfg.nages[id]) || S.cfg.nage || ''; }
+function lettreNage(n) {
+  const v = String(n || '').trim().toLowerCase();
+  if (!v) return '–';
+  if (v === '4n') return '4N';
+  if (v === 'nl' || v[0] === 'c') return 'C';
+  if (v[0] === 'd') return 'D';
+  if (v[0] === 'b') return 'B';
+  if (v[0] === 'p') return 'P';
+  return v.slice(0, 2).toUpperCase();
+}
+function repCourante(id) { const p = pending(id); return p < 0 ? nb() - 1 : p; }
+// Avant le départ (ou série finie pour lui) : pour toute la série. En cours de série : à partir de la répétition à venir,
+// les répétitions déjà nagées gardent leur nage. Hors de la pile Annuler, comme les coups de bras.
+function setNage(id, n) {
+  const p = pending(id), from = S.T0 == null || p < 0 ? 0 : p;
+  const a = Array.from({ length: nb() }, (_, r) => (r >= from ? n : nageDe(id, r)));
+  S.nagesRep = S.nagesRep || {}; S.nagesRep[id] = a;
+  if (from === 0) S.cfg.nages = Object.assign(S.cfg.nages || {}, { [id]: n });
+  touched(); save();
+}
+function openNage(id) {
+  const cur = lettreNage(nageDe(id, repCourante(id))), p = pending(id), ouvert = Date.now();
+  const portee = S.T0 == null || p < 0 ? 'Pour toute la série.' : `À partir de la rép. ${p + 1} ; les répétitions déjà nagées gardent leur nage.`;
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Nage de ${esc(S.names[id])}">
+    <h2>Nage · ${esc(S.names[id])}</h2>
+    <div class="nage-keys">${NAGES.map(([v, l, nom]) => `<button class="pad-key ${cur === l ? 'on' : ''}" data-nage="${v}">${l}<small>${nom}</small></button>`).join('')}</div>
+    <p class="note">${portee}</p>
+    <button class="btn big" id="n-close">Fermer</button>
+  </div></div>`;
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+  $('#n-close').onclick = closeLayer;
+  $('#layer').querySelectorAll('[data-nage]').forEach(b => b.onclick = () => {
+    if (Date.now() - ouvert < 350) return; // le doigt qui vient d'ouvrir ce choix ne doit pas choisir à sa place
+    const n = NAGES.find(x => x[0] === b.dataset.nage);
+    setNage(id, n[0]); closeLayer(); tick(); toast(`${S.names[id]} · ${n[2]}`);
+  });
+}
+// Tap sur un petit carré. Pendant que le nageur nage, les carrés sont inactifs : le tap reste un tap chrono.
+function nageEnCours(id, t) { if (S.T0 == null) return false; const p = pending(id); return p >= 0 && t >= dep(id, p); }
+function tapCarre(id, quoi) {
+  if (quoi === 'nage') { openNage(id); return; }
+  const r = cbTarget(id) ?? S.res[id].reduce((acc, x, i) => (x && x.st === 'ok' ? i : acc), -1);
+  if (r >= 0) openPad(id, r); else { flash(id); toast('Coups de bras : après sa première répétition'); }
+}
+
+function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0, absents: S.absents || [], pauses: S.pauses || [], pause: S.pause || null }); }
+// Chaque action annulable porte un libellé : « Annuler » dit ce qu'il défait (« Léa, arrivée rép. 4 »).
+function pushUndo(label = 'dernière action') { undoStack.push(JSON.stringify({ s: snapshot(), label })); if (undoStack.length > 300) undoStack.shift(); }
 function undo() {
-  const s = undoStack.pop(); if (!s) return;
-  Object.assign(S, JSON.parse(s)); syncDisplay(); save(); render(); toast('Dernière action annulée');
+  const e = undoStack.pop(); if (!e) { toast('Rien à annuler'); return; }
+  const { s, label } = JSON.parse(e);
+  Object.assign(S, JSON.parse(s)); syncDisplay(); save(); render(); toast(`Annulé : ${label}`);
 }
 function syncDisplay() { display = S.queue.map(q => [...q]); laneTimers.forEach(clearTimeout); }
 function scheduleDisplay(l, delay = DISPLAY_DELAY_MS) {
@@ -436,19 +547,34 @@ function tap(id, t) {
   if (p < 0) { const r = cbTarget(id); if (r != null) openPad(id, r); return; } // série finie : il peut rester ses coups de bras
   // Nageur au repos : le tap ouvre le pavé des coups de bras s'il en reste à noter.
   if (t < dep(id, p)) { const r = cbTarget(id); if (r != null) openPad(id, r); else flash(id); return; }
-  pushUndo();
   // Tap oublié : si on est déjà après le départ de la répétition suivante, ce tap lui appartient.
-  while (p + 1 < nb() && t >= dep(id, p + 1)) { S.res[id][p] = { t: null, st: 'manque', auto: true }; p++; }
-  S.res[id][p] = { t: (t - dep(id, p)) / 1000, st: 'ok' };
+  let q = p; while (q + 1 < nb() && t >= dep(id, q + 1)) q++;
+  // Tap impossible (goutte d'eau, doigt qui frôle) : arrivée bien trop rapide pour ce nageur → ignoré.
+  const duree = (t - dep(id, q)) / 1000;
+  if (duree < tempsMini(id, q)) {
+    flashRefus(id); toast(`Tap ignoré : ${S.names[id]} en ${fmt(duree, 1)}, trop tôt · appui long pour corriger`);
+    return;
+  }
+  pushUndo(`${S.names[id]}, arrivée rép. ${q + 1}`);
+  while (p < q) { S.res[id][p] = { t: null, st: 'manque', auto: true }; p++; }
+  S.res[id][p] = { t: duree, st: 'ok' };
   moveToEnd(id); save(); scheduleDisplay(laneOf(id)); checkFinish();
   const el = tileEls[id]; if (el) { el.classList.add('tapped'); setTimeout(() => el.classList.remove('tapped'), 600); }
   bip(1000, 0.07);
 }
 function flash(id) { const el = tileEls[id]; if (!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+function flashRefus(id) { flash(id); const el = tileEls[id]; if (el) { el.classList.add('refus'); setTimeout(() => el.classList.remove('refus'), 700); } bip(300, 0.15); }
+// Temps le plus court accepté pour une arrivée : 60 % de son temps habituel (rép. précédente ou cible),
+// et jamais moins de 0,45 s par mètre (≈ 22" au 50), même sans repère.
+function tempsMini(id, r) {
+  const prev = S.res[id].slice(0, r).reverse().find(x => x && x.st === 'ok');
+  const repere = prev ? prev.t : (S.cfg.cibles && S.cfg.cibles[id]) || null;
+  return Math.max(S.cfg.distance * 0.45, repere ? repere * 0.6 : 0);
+}
 
 function markPending(id, st) {
   const p = pending(id); if (p < 0) return;
-  pushUndo(); S.res[id][p] = { t: null, st }; moveToEnd(id);
+  pushUndo(`${S.names[id]}, rép. ${p + 1} ${st === 'manque' ? 'manquée' : 'non faite'}`); S.res[id][p] = { t: null, st }; moveToEnd(id);
   display[laneOf(id)] = [...S.queue[laneOf(id)]]; save(); checkFinish();
 }
 
@@ -471,7 +597,7 @@ function finishSeries(manual) {
   setTimeout(autoEnvoi, 1500);
 }
 function setResult(id, r, val) { pushUndo(); S.res[id][r] = val; touched(); save(); }
-function nextCycle() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
+function nextCycle() { return repsLancees(); }
 function moveInOrder(id, dir) {
   const l = laneOf(id), arr = S.laneOrder[l], i = arr.indexOf(id), j = i + dir;
   if (i < 0 || j < 0 || j >= arr.length) return null;
@@ -502,15 +628,12 @@ function markAbsent(id) {
   S.absents = [...(S.absents || []), id];
   syncDisplay(); save();
 }
-// Sort de l'eau (pendant la série) : ses répétitions restantes passent en « non faite » ;
-// ceux qui partaient derrière lui remontent d'une place à partir de la répétition suivante.
+// Sort de l'eau (pendant la série) : ses répétitions restantes passent en « non faite ».
+// Sa place de départ reste vide : les autres gardent leur vague, comme au bassin (test du 10/11 : les décaler faussait leurs temps).
 function withdraw(id) {
   const p = pending(id), l = laneOf(id); if (S.T0 == null || p < 0) return;
-  pushUndo();
+  pushUndo(`${S.names[id]} sorti de l'eau`);
   for (let r = p; r < nb(); r++) if (!S.res[id][r]) S.res[id][r] = { t: null, st: 'non_faite' };
-  S.laneOrder[l] = S.laneOrder[l].filter(x => x !== id);
-  const r0 = nextCycle();
-  S.laneOrder[l].forEach((sid, idx) => { for (let r = r0; r < nb(); r++) S.order[sid][r] = idx + 1; });
   moveToEnd(id); display[l] = [...S.queue[l]]; touched(); save(); checkFinish();
 }
 // Ajout d'un nageur (avant le départ), pris dans la liste Nageurs du Sheet, tous groupes : il part en dernier dans sa ligne.
@@ -552,22 +675,76 @@ function openAdd() {
     addSwimmer(id, l); closeLayer(); renderChrono(); toast(`${S.names[id]} ajouté · ligne ${laneLabel(l)}`);
   });
 }
-function leadRep() { return S.T0 == null ? 0 : Math.min(nb(), Math.floor((Date.now() - S.T0) / cycleMs()) + 1); }
+function leadRep() { return repsLancees(); }
 
 // ---------- Départ calé sur la trotteuse du bassin ----------
 // On touche « Caler » quand l'aiguille passe au 60 : l'app retient ce calage (phase dans la minute) sur l'appareil.
 // Ensuite « Au prochain 60 / 30 » programme le départ : décompte, bips 3-2-1, et le chrono part tout seul.
 const KEY_TROT = 'chrono-trotteuse';
-let departPrevu = null, dernierBip = null;
+let departPrevu = null, dernierBip = null, departMarque = 60;
 function phaseTrotteuse() { const v = getLS(KEY_TROT); return v === null || v === '' ? null : Number(v); }
 function calerTrotteuse() { setLS(KEY_TROT, String(Date.now() % 60000)); }
-function prochainTop(periode) {
-  const now = Date.now(), ph = phaseTrotteuse() % periode;
-  let t = now + (((ph - now % periode) % periode) + periode) % periode;
-  if (t - now < 3000) t += periode; // trop juste pour se placer : top suivant
+// marque : position de l'aiguille au moment du départ (60 = en haut, 30 = en bas). Un tour d'aiguille = 60 s.
+// « Au prochain 30 » part donc quand l'aiguille est sur le 30, jamais sur le 60.
+function prochainTop(marque) {
+  const now = Date.now(), cible = (phaseTrotteuse() + (marque % 60) * 1000) % 60000;
+  let t = now + (((cible - now % 60000) % 60000) + 60000) % 60000;
+  if (t - now < 3000) t += 60000; // trop juste pour se placer : tour suivant
   return t;
 }
-function lancerDepart(t0) { pushUndo(); S.T0 = t0; save(); keepAwake(); bip(1500, 0.35); renderChrono(); }
+// Où l'app situe l'aiguille (1 à 60) : à comparer d'un coup d'œil avec la trotteuse du bassin.
+function aiguille(now) { return Math.floor(((((now - phaseTrotteuse()) % 60000) + 60000) % 60000) / 1000) || 60; }
+function lancerDepart(t0) { pushUndo(); S.T0 = t0; S.pauses = []; S.pause = null; save(); keepAwake(); bip(1500, 0.35); renderChrono(); }
+
+// ---------- Pause : fige les départs à venir, pas les nageurs déjà dans l'eau ----------
+// À la reprise, tous les départs restants sont décalés de la durée de la pause ; le prochain laisse au moins 5 s pour se placer.
+const REPRISE_MIN_MS = 5000;
+function pauser() {
+  if (S.T0 == null || S.pause || S.done) return;
+  S.pause = { at: Date.now() }; save(); bip(600, 0.2); tick();
+}
+// cible (facultatif) : instant voulu pour le prochain départ, par exemple le prochain 60 de la trotteuse.
+function reprendre(cible) {
+  if (!S.pause) return;
+  const now = Date.now(); let mini = Infinity;
+  S.lanes.flat().forEach(id => {
+    const p = pending(id); if (p < 0) return;
+    for (let r = p; r < nb(); r++) { const d = dep(id, r) - now; if (d >= 0) { mini = Math.min(mini, d); break; } } // 0 : départ figé pile au début de la pause
+  });
+  const ajout = cible && isFinite(mini) ? cible - now - mini : (mini < REPRISE_MIN_MS ? REPRISE_MIN_MS - mini : 0);
+  const dur = now - S.pause.at + ajout;
+  pushUndo('reprise après pause');
+  S.pauses = [...(S.pauses || []), { at: S.pause.at, dur }]; S.pause = null;
+  save(); bip(1200, 0.2); closeLayer(); tick();
+  toast(cible ? `Reprise · prochain départ dans ${Math.round((cible - now) / 1000)}"` : `Reprise · départs décalés de ${Math.round(dur / 1000)}"`);
+}
+function openReprise() {
+  const cale = phaseTrotteuse() != null;
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Reprendre la série">
+    <h2>Reprendre la série</h2>
+    <p class="note">Les nageurs repartent dans le même ordre, à la répétition où ils en étaient.</p>
+    ${cale ? `<div class="row"><button class="btn go big" id="r60">Au prochain 60 · ${Math.ceil((prochainTop(60) - Date.now()) / 1000)}"</button>
+      <button class="btn big" id="r30">Au prochain 30 · ${Math.ceil((prochainTop(30) - Date.now()) / 1000)}"</button></div>` : ''}
+    <button class="btn" id="rnow">Tout de suite (prochain départ dans 5")</button>
+    <button class="btn" id="rclose">Rester en pause</button>
+  </div></div>`;
+  if (cale) { $('#r60').onclick = () => reprendre(prochainTop(60)); $('#r30').onclick = () => reprendre(prochainTop(30)); }
+  $('#rnow').onclick = () => reprendre();
+  $('#rclose').onclick = closeLayer;
+}
+// Top mural : pendant la série, on touche au passage du 60 de l'horloge du bassin.
+// L'écart avec le calage mesure la dérive entre l'iPad et l'horloge : les départs à venir sont décalés d'autant.
+function topMural() {
+  const now = Date.now(), ph = phaseTrotteuse();
+  if (ph == null) { calerTrotteuse(); toast('Trotteuse calée'); return; }
+  let ecart = (((now - ph) % 60000) + 60000) % 60000; if (ecart > 30000) ecart -= 60000;
+  if (Math.abs(ecart) > 10000) { toast(`Écart de ${fmt(ecart / 1000, 1)} : trop grand, touche bien au passage du 60`); return; }
+  pushUndo(`recalage sur l'horloge (${ecart >= 0 ? '+' : ''}${fmt(ecart / 1000, 1)})`);
+  S.pauses = [...(S.pauses || []), { at: now, dur: ecart }];
+  calerTrotteuse(); save(); bip(1200, 0.12); tick();
+  toast(`Recalé sur l'horloge : départs à venir ${ecart >= 0 ? '+' : ''}${fmt(ecart / 1000, 1)}`);
+}
 
 // ---------- Signal sonore (au tap, aux départs) ----------
 const KEY_SON = 'chrono-son';
@@ -668,6 +845,7 @@ function renderSetup() {
       <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <div class="actions"><button class="btn" id="f-son">${sonActif() ? '🔊 Son au tap : activé' : '🔇 Son au tap : coupé'}</button>
         ${secret ? '<button class="btn" id="f-oubli">Changer le code secret</button>' : ''}</div>
+      <p class="note">Version de l'app : ${APP_VERSION}.</p>
       <p class="note">Trotteuse : ${phaseTrotteuse() == null ? 'pas encore calée (bouton « Caler » avant le départ d\'une série).' : 'calée sur cet appareil. Recale-la si tu changes de bassin ou si l\'horloge a été réglée.'}</p>
     </details>
   </div></div></div>`;
@@ -713,12 +891,13 @@ function renderChrono() {
       ${S.cfg.essai ? '<span class="tag-essai">Essai · nageurs fictifs</span>' : ''}
       <div class="spacer"></div>
       ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button>${!S.cfg.essai && PLAN ? '<button class="btn" id="add">+ Nageur</button>' : ''}<button class="btn" id="home">Accueil</button>` : ''}
+      ${S.T0 != null ? '<button class="btn" id="pause">⏸ Pause</button><button class="btn" id="top">⟲ Top 60</button>' : ''}
       <button class="btn" id="recap">Récap</button>
       <button class="btn big undo" id="undo">↶ Annuler</button>
     </div>
     ${S.T0 == null ? `<div class="bar trot">
       <span class="note" id="trot-info"></span><div class="spacer"></div>
-      ${phaseTrotteuse() != null ? `<button class="btn go" id="t60">Au prochain 60</button><button class="btn" id="t30">Au prochain 30</button>` : ''}
+      ${phaseTrotteuse() != null ? `<button class="btn go" id="t60">Au prochain 60 · <span class="num" id="t60s"></span></button><button class="btn" id="t30">Au prochain 30 · <span class="num" id="t30s"></span></button>` : ''}
       ${departPrevu ? `<button class="btn danger" id="tstop">Annuler le départ programmé</button>` : ''}
       <button class="btn" id="tcal">${phaseTrotteuse() != null ? '⟲ Recaler' : 'Caler sur la trotteuse'}</button>
     </div>` : ''}
@@ -729,13 +908,15 @@ function renderChrono() {
   if (S.T0 == null) {
     $('#go').onclick = () => { departPrevu = null; lancerDepart(Date.now()); };
     $('#tcal').onclick = () => { calerTrotteuse(); bip(1200, 0.12); toast('Trotteuse calée : touche au passage du 60, c\'est fait'); renderChrono(); };
-    if ($('#t60')) $('#t60').onclick = () => { departPrevu = prochainTop(60000); renderChrono(); };
-    if ($('#t30')) $('#t30').onclick = () => { departPrevu = prochainTop(30000); renderChrono(); };
+    if ($('#t60')) $('#t60').onclick = () => { departPrevu = prochainTop(60); departMarque = 60; renderChrono(); };
+    if ($('#t30')) $('#t30').onclick = () => { departPrevu = prochainTop(30); departMarque = 30; renderChrono(); };
     if ($('#tstop')) $('#tstop').onclick = () => { departPrevu = null; renderChrono(); };
     $('#home').onclick = () => { view = 'setup'; render(); };
     if ($('#add')) $('#add').onclick = openAdd;
   } // « Terminer » est dans le Récap : loin d'« Annuler », qui sert sans cesse
   $('#undo').onclick = undo;
+  if ($('#pause')) $('#pause').onclick = () => (S.pause ? openReprise() : pauser());
+  if ($('#top')) $('#top').onclick = topMural;
   $('#recap').onclick = () => { view = 'recap'; render(); };
   buildGrid(); tick();
 }
@@ -799,7 +980,7 @@ function buildGrid() {
     const tiles = lane.querySelector('.tiles');
     ids.forEach(id => {
       const el = document.createElement('div'); el.className = 'tile';
-      el.innerHTML = `<div class="name">${esc(S.names[id])}</div><div class="time num"></div><div class="meta num"></div>`;
+      el.innerHTML = `<div class="name">${esc(S.names[id])}</div><div class="time num"></div><div class="cd num" hidden></div><div class="meta num"></div><div class="sqs"><div class="sq nage" data-sq="nage"></div><div class="sq cbq off" data-sq="cb">CB</div></div>`;
       bindPress(el, id); tiles.appendChild(el); tileEls[id] = el;
     });
     box.appendChild(lane);
@@ -812,6 +993,9 @@ function bindPress(el, id) {
     e.preventDefault();
     const t = Date.now(); // l'instant du toucher fait foi, pas celui du relâcher
     try { el.setPointerCapture(e.pointerId); } catch (err) {} // le relâcher revient à cette tuile, même si le doigt glisse
+    // Petit carré (nage / CB) : actif seulement si le nageur ne nage pas ; sinon c'est un tap chrono comme le reste de la tuile.
+    const sq = e.target && e.target.closest ? e.target.closest('.sq') : null;
+    if (sq && !nageEnCours(id, t)) { presses.set(e.pointerId, { id, t, x: e.clientX, y: e.clientY, long: false, timer: null, sq: sq.dataset.sq }); return; }
     el.classList.add('pressing');
     const p = { id, t, x: e.clientX, y: e.clientY, long: false, timer: setTimeout(() => { p.long = true; el.classList.remove('pressing'); openMenu(id); }, LONG_PRESS_MS) };
     presses.set(e.pointerId, p);
@@ -824,6 +1008,7 @@ function bindPress(el, id) {
   const end = (e, commit) => {
     const p = presses.get(e.pointerId); if (!p) return;
     presses.delete(e.pointerId); clearTimeout(p.timer); el.classList.remove('pressing');
+    if (p.sq) { if (commit) tapCarre(p.id, p.sq); return; }
     if (!p.long && (commit || Date.now() - p.t < LONG_PRESS_MS)) tap(p.id, p.t);
   };
   el.addEventListener('pointerup', e => end(e, true));
@@ -843,42 +1028,69 @@ function tick() {
       const reste = Math.ceil((departPrevu - now) / 1000);
       if (reste <= 3 && reste >= 1 && dernierBip !== reste) { dernierBip = reste; bip(800, 0.12); }
       if (now >= departPrevu) { const t0 = departPrevu; departPrevu = null; dernierBip = null; lancerDepart(t0); return; }
-      if (info) info.textContent = `Départ dans ${reste}"`;
+      if (info) info.textContent = `Départ au ${departMarque} dans ${reste}"`;
     } else if (info) {
       const ph = phaseTrotteuse();
-      info.textContent = ph == null ? 'Départ au top de la trotteuse : cale-la d\'abord' : `Prochain 60 dans ${Math.ceil((prochainTop(60000) - now) / 1000)}"`;
+      info.textContent = ph == null ? 'Départ au top de la trotteuse : cale-la d\'abord' : `Aiguille sur ${aiguille(now)}`;
     }
+    const s60 = $('#t60s'), s30 = $('#t30s');
+    if (s60) s60.textContent = `${Math.ceil((prochainTop(60) - now) / 1000)}"`;
+    if (s30) s30.textContent = `${Math.ceil((prochainTop(30) - now) / 1000)}"`;
   }
   const finished = S.T0 != null && allDone();
   if (clock) clock.textContent = S.T0 == null ? '00:00' : finished ? 'Fini' : fmtClock(now - S.T0);
   if (rep) rep.innerHTML = S.T0 == null ? `${S.cfg.nbRep} × ${S.cfg.distance} · départ ${fmtCycle(S.cfg.cycle)} · vagues ${S.cfg.vague}"`
-    : finished ? `Coups de bras à noter, puis la série se range` : `Rép. <b>${leadRep()}</b> / ${nb()}`;
+    : finished ? `Coups de bras à noter, puis la série se range`
+    : S.pause ? `⏸ <b>Pause</b> depuis ${fmtClock(now - S.pause.at)} · départs figés` : `Rép. <b>${leadRep()}</b> / ${nb()}`;
+  const pb = $('#pause');
+  if (pb) {
+    const lab = S.pause ? '▶ Reprendre' : '⏸ Pause';
+    if (pb.textContent !== lab) { pb.textContent = lab; pb.classList.toggle('go', !!S.pause); }
+    pb.hidden = finished;
+  }
   for (const id in tileEls) {
     const el = tileEls[id], p = pending(id), r = S.res[id];
     const last = r.slice().reverse().find(x => x && x.st === 'ok');
     const autoMiss = r.some(x => x && x.auto);
-    let cls = 'tile', time = '', meta = '';
+    // Une forme par information (retour terrain du 10/11) : dans l'eau = tuile blanche et temps qui défile ;
+    // au mur = tuile foncée, temps nagé en gros ; décompte = pastille « ⏱ 12" » toujours au même endroit ; 3 dernières s = rouge.
+    let cls = 'tile', time = '', meta = '', cd = '';
     if (p < 0) { cls += ' done'; time = last ? fmt(last.t) : 'Fini'; meta = 'série finie'; }
     else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][0]}ᵉ départ`; meta = `rép. 1 / ${nb()}`; }
     else {
       const d = dep(id, p);
-      meta = `rép. ${p + 1} / ${nb()}` + (last ? ` · ${fmt(last.t)}` : '');
+      meta = `rép. ${p + 1} / ${nb()}`;
       if (now < d) {
-        // Au repos : le temps qu'il vient de nager en gros (le nageur le demande), le décompte en petit ;
-        // les 3 dernières secondes, le décompte repasse en gros pour le lancer.
-        const reste = Math.ceil((d - now) / 1000), prev = p > 0 ? r[p - 1] : null;
-        cls += ' wait' + (d - now <= 3000 ? ' go' : '');
-        if (d - now > 3000 && prev && prev.st === 'ok') { cls += ' rest'; time = fmt(prev.t); meta = `départ dans ${reste}" · rép. ${p + 1} / ${nb()}`; }
-        else time = `Départ ${reste}"`;
+        const reste = Math.ceil((d - now) / 1000), prev = p > 0 ? r[p - 1] : null, fige = !!S.pause;
+        cls += ' wait' + (fige ? ' pause' : d - now <= 3000 ? ' go' : '');
+        if (!fige && d - now <= 3000) time = `${reste}"`; // le lancer : chiffre seul, énorme, sur fond rouge
+        else {
+          cd = `${fige ? '⏸' : '⏱'} ${reste}"`;
+          if (prev && prev.st === 'ok') { cls += ' rest'; time = fmt(prev.t); meta = `au mur · rép. ${p + 1} / ${nb()}`; }
+          else time = p === 0 ? 'au départ' : 'au mur';
+        }
       }
-      else { time = fmt((now - d) / 1000, 1); if (now >= expected(id, p) - HOT_BEFORE_MS) cls += ' hot'; }
+      else { cls += ' swim'; time = fmt((now - d) / 1000, 1); meta = `dans l'eau · rép. ${p + 1} / ${nb()}`; if (now >= expected(id, p) - HOT_BEFORE_MS) cls += ' hot'; }
     }
     if (S.T0 != null && cbTarget(id) != null) { cls += ' cb'; meta = 'CB à noter' + (meta ? ' · ' + meta : ''); }
+    // Petits carrés : lettre de la nage à venir, état des coups de bras de la dernière répétition nagée
+    const sn = el.querySelector('.sq.nage'), sc = el.querySelector('.sq.cbq');
+    if (sn && sc) {
+      const ln = lettreNage(nageDe(id, repCourante(id)));
+      if (sn.textContent !== ln) sn.textContent = ln;
+      const lastOk = r.reduce((acc, x, i) => (x && x.st === 'ok' ? i : acc), -1), du = S.T0 != null && cbTarget(id) != null;
+      const cq = 'sq cbq' + (lastOk < 0 ? ' off' : du ? ' due' : ''), ct = lastOk >= 0 && !du && cbComplete(id, lastOk) ? 'CB✓' : 'CB';
+      if (sc.className !== cq) sc.className = cq;
+      if (sc.textContent !== ct) sc.textContent = ct;
+    }
     if (el.classList.contains('pressing')) cls += ' pressing';
     if (el.classList.contains('tapped')) cls += ' tapped';
+    if (el.classList.contains('refus')) cls += ' refus';
     if (el.className !== cls) el.className = cls;
     el.querySelector('.time').textContent = time;
     el.querySelector('.meta').textContent = meta;
+    const cde = el.querySelector('.cd');
+    if (cde) { if (cde.textContent !== cd) cde.textContent = cd; cde.hidden = !cd; }
     let b = el.querySelector('.badge');
     if (autoMiss && !b) { b = document.createElement('div'); b.className = 'badge'; b.textContent = 'manqué'; el.appendChild(b); }
     if (!autoMiss && b) b.remove();
@@ -901,6 +1113,7 @@ function openMenu(id) {
     </div>
     <button class="btn danger" id="m-out">Sort de l'eau (rép. ${p + 1} à ${nb()} non faites)</button>` : '<p class="note">Série terminée pour ce nageur.</p>'}
     ${lastOk >= 0 ? `<button class="btn" id="m-cb">Coups de bras (rép. ${lastOk + 1})</button>` : ''}
+    <button class="btn" id="m-nage">Nage : ${lettreNage(nageDe(id, repCourante(id)))} · changer…</button>
     <button class="btn" id="m-fix">Corriger un temps…</button>
     ${p >= 0 ? `<h2>Ordre de départ</h2>
     <div class="order" id="m-order">${orderHtml()}</div>
@@ -918,12 +1131,13 @@ function openMenu(id) {
   $('#m-close').onclick = closeLayer;
   if (S.T0 == null) armed($('#m-abs'), 'Confirmer : absent', () => { markAbsent(id); closeLayer(); buildGrid(); toast(`${S.names[id]} absent · ↶ Annuler pour le remettre`); });
   else if (p >= 0) {
-    armed($('#m-out'), "Confirmer : sort de l'eau", () => { withdraw(id); closeLayer(); buildGrid(); toast(`${S.names[id]} sorti de l'eau`); });
+    armed($('#m-out'), "Confirmer : sort de l'eau", () => { withdraw(id); closeLayer(); buildGrid(); toast(`${S.names[id]} sorti de l'eau · les autres gardent leur vague`); });
     $('#m-miss').onclick = () => { markPending(id, 'manque'); closeLayer(); buildGrid(); };
     $('#m-nf').onclick = () => { markPending(id, 'non_faite'); closeLayer(); buildGrid(); };
   }
   if (lastOk >= 0) $('#m-cb').onclick = () => { closeLayer(); openPad(id, lastOk); };
   $('#m-fix').onclick = () => openFix(id, Math.max(0, (p < 0 ? nb() : p) - 1));
+  $('#m-nage').onclick = () => openNage(id);
   const mv = dir => {
     const from = moveInOrder(id, dir); if (from == null) return;
     $('#m-order').innerHTML = orderHtml();
@@ -1017,7 +1231,7 @@ function renderRecap() {
   const rows = S.lanes.map((ids, l) => ids.map(id => {
     const ok = S.res[id].filter(x => x && x.st === 'ok').map(x => x.t);
     const avg = ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : null;
-    return `<tr><td><b>${esc(S.names[id])}</b> · L${laneLabel(l)}</td>${reps.map(r => {
+    return `<tr><td><b>${esc(S.names[id])}</b> · L${laneLabel(l)} · ${[...new Set(reps.map(r => lettreNage(nageDe(id, r))))].join('→')}</td>${reps.map(r => {
       const x = S.res[id][r], a = cbOf(id, r);
       const missing = isCounted(r) && x && x.st === 'ok' && !cbComplete(id, r);
       const cb = a ? `<div class="cbline num">${cbText(a)}</div>` : missing ? `<div class="cbline">CB à noter</div>` : '';
