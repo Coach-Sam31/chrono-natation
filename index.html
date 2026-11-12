@@ -195,6 +195,31 @@ td.cb-missing .cbline { color: var(--warn); }
 @keyframes flash { 0%, 100% { transform: none; } 30% { transform: translateX(-5px); } 70% { transform: translateX(5px); } }
 @media (prefers-reduced-motion: reduce) { .tile.flash { animation: none; } .tile.pressing::after { transition: none; } }
 
+/* Bassin : barre du haut (séries prêtes en cartes, séries terminées en ✓), puis une bande par série dépliée */
+.bar.top { align-items: stretch; flex-wrap: nowrap; gap: 8px; }
+.bar.top > .btn { flex-shrink: 0; min-height: 48px; padding: 8px 14px; }
+.bar.top > .btn.undo { padding: 8px 20px; }
+.chips { flex: 1; min-width: 0; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; max-height: 108px; overflow-y: auto; }
+.carte { display: inline-flex; border: 2px solid var(--ink); border-radius: 10px; overflow: hidden; background: var(--surface); max-width: 100%; }
+.carte-nom { border: 0; background: none; padding: 6px 10px; font-weight: 600; min-height: 46px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.carte-go { border: 0; border-left: 2px solid var(--ink); background: var(--lane); color: var(--lane-ink); font-family: var(--font-display); font-weight: 700; font-size: 20px; letter-spacing: .04em; text-transform: uppercase; padding: 6px 16px; }
+.chip.fini { min-height: 46px; color: var(--muted); font-weight: 600; }
+.bands { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+.bands.bout { flex-direction: row; }
+.band { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.band + .band { border-top: 3px solid var(--ink); padding-top: 6px; }
+.bands.bout .band + .band { border-top: 0; padding-top: 0; border-left: 3px solid var(--ink); padding-left: 8px; }
+.bhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bhead .btn { min-height: 42px; padding: 6px 12px; }
+.bhead .btn.big { font-size: 22px; padding: 4px 22px; }
+.b-nom { border: 0; background: none; padding: 0; min-height: 42px; text-align: left; font-family: var(--font-display); font-weight: 600; font-size: clamp(17px, 2.4vw, 22px); line-height: 1.1; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
+.b-nom b { font-weight: 700; font-size: 1.15em; }
+.b-clock { font-family: var(--font-display); font-weight: 700; font-size: clamp(26px, 4.4vw, 38px); line-height: 1; }
+.b-rep { font-family: var(--font-display); font-weight: 600; font-size: clamp(17px, 2.6vw, 22px); color: var(--muted); }
+.b-info { font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+.band .lanes { flex: 1; min-height: 0; }
+@media (max-width: 700px) { .bar.top { flex-wrap: wrap; } .chips { order: 3; flex-basis: 100%; } }
+
 /* Préparation & récap */
 .scroll { overflow-y: auto; flex: 1; min-height: 0; }
 .panel { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
@@ -237,25 +262,41 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v10';
-const KEY = 'chrono-maquette-v1';
+const APP_VERSION = 'v11';
+const KEY = 'chrono-maquette-v1';            // v10 : une seule série en cours. Reprise au premier lancement de la v11, puis vidée.
+const KEY_LIVE = 'chrono-live-v2';           // toutes les séries ouvertes (prêtes ou en cours)
 const KEY_HIST = 'chrono-maquette-historique-v1';
+const KEY_RUNS = 'chrono-passages';          // dernier numéro de passage parti, par série prête
 const NAMES = ['Léa M.', 'Tom B.', 'Inès R.', 'Hugo D.', 'Jade P.', 'Noah L.', 'Manon G.', 'Enzo F.',
   'Chloé T.', 'Lucas V.', 'Zoé C.', 'Malo S.', 'Lina A.', 'Adam K.', 'Rose N.', 'Théo J.',
   'Emma H.', 'Louis E.', 'Alice W.', 'Jules O.', 'Lou Q.', 'Nino Y.', 'Anna U.', 'Gabin I.',
   'Mia Z.', 'Sacha X.', 'Eva B.', 'Liam C.', 'Nina D.', 'Paul F.', 'Sara G.', 'Yanis H.'];
 const LONG_PRESS_MS = 900, DISPLAY_DELAY_MS = 1000, HOT_BEFORE_MS = 4000;
 
-let S = null;          // état de la série (sauvegardé à chaque action)
+let LIVE = [];         // séries ouvertes : prêtes ou en cours, toutes sauvegardées à chaque geste
+let S = null;          // série sur laquelle porte le geste en cours (ou série affichée dans le Récap)
 let view = 'setup';    // setup | chrono | recap
-let display = [];      // ordre affiché des tuiles par ligne (suit S.queue avec ~1" de retard)
-let laneTimers = [];
+const RT = {};         // par série (uid), jamais sauvegardé : ordre affiché des tuiles, minuteries, départ programmé, bande dépliée
 let undoStack = [];
 let presses = new Map();
-let tileEls = {};
+let tileEls = {};      // clé « uid|id_nageur »
 let wakeLock = null;
-let finishTimer = null;
+let layerUid = null;   // série du menu ouvert (pour ne fermer que le sien)
 let HIST = [];
+// Règle : tout geste à l'écran (tuile, bouton d'une série) commence par S = sa série ;
+// tout ce qui tourne seul (minuteries, affichage) passe par withS et rend la main à la série d'avant.
+function rt(s = S) { return RT[s.uid] || (RT[s.uid] = { display: s.queue.map(q => [...q]), timers: [], finish: null, departPrevu: null, marque: 60, bip: null, open: null }); }
+function withS(s, fn) { const prev = S; S = s; try { return fn(); } finally { S = prev; } }
+function serie(uid) { return LIVE.find(x => String(x.uid) === String(uid)) || HIST.find(x => String(x.uid) === String(uid)) || null; }
+function started(s) { return s.T0 != null; }
+function tileOf(id) { return tileEls[S.uid + '|' + id]; }
+// Nom court d'une série : « C4-20261112-ANC-G1-P1 » → « ANC-G1-P1 » ; « · p2 » à partir du 2e passage.
+function idCourt(s) { return s.cfg.essai ? 'Essai' : String(s.cfg.idSerie || '').replace(/^.*?-\d{8}-/, '') || String(s.cfg.groupe || 'Série'); }
+function nomSerie(s) { return idCourt(s) + (s.passage > 1 ? ` · p${s.passage}` : ''); }
+function detailSerie(s) {
+  const n = [...new Set(Object.values(s.cfg.nages || {}).filter(Boolean))];
+  return `${s.cfg.nbRep} × ${s.cfg.distance}${n.length > 1 ? ' spé' : n[0] ? ' ' + n[0] : s.cfg.nage ? ' ' + s.cfg.nage : ''}`;
+}
 
 // ---------- Utilitaires ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -278,18 +319,45 @@ function parseTime(str) {
   const v = p.length === 2 ? Number(p[0]) * 60 + Number(p[1]) : Number(p[0]);
   return Number.isFinite(v) && v > 0 ? v : null;
 }
-// Série en cours sous KEY ; séries terminées dans l'historique (HIST), toujours modifiables.
-function save() {
-  if (!S) return;
-  try {
-    if (S.done) {
-      const i = HIST.findIndex(x => x.uid === S.uid);
-      if (i >= 0) HIST[i] = S; else HIST.unshift(S);
-      localStorage.setItem(KEY_HIST, JSON.stringify(HIST));
-    } else localStorage.setItem(KEY, JSON.stringify(S));
-  } catch (e) {}
+// Séries ouvertes sous KEY_LIVE (toutes, même pas encore parties) ; séries terminées dans l'historique (HIST), toujours modifiables.
+// Une écriture qui échoue (mémoire de l'appareil pleine) ne passe plus sous silence : on fait de la place, sinon on prévient.
+let alerteMem = 0;
+function ecrire(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+function alerteMemoire() {
+  if (Date.now() - alerteMem < 20000) return; alerteMem = Date.now();
+  toast('⚠ Sauvegarde impossible : mémoire pleine. Envoie les séries au Sheet, puis supprime d\'anciennes séries de l\'historique.', 7000);
 }
-function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); return s && !s.done ? s : null; } catch (e) { return null; } }
+function saveLive() {
+  if (ecrire(KEY_LIVE, LIVE)) return true;
+  if (purgeHist(true)) ecrire(KEY_HIST, HIST);
+  if (ecrire(KEY_LIVE, LIVE)) return true;
+  alerteMemoire(); return false;
+}
+function saveHist() {
+  if (ecrire(KEY_HIST, HIST)) return true;
+  if (purgeHist(true) && ecrire(KEY_HIST, HIST)) return true;
+  alerteMemoire(); return false;
+}
+function save() { if (!S) return; if (S.done) saveHist(); else saveLive(); }
+// L'historique ne grossit pas sans fin : les séries déjà envoyées au Sheet (ou d'essai) de plus de 45 jours quittent l'appareil.
+// Une série pas encore envoyée n'est jamais retirée. force : mémoire pleine, on ne garde que les 20 dernières déjà envoyées.
+function purgeHist(force) {
+  const limite = Date.now() - 45 * 86400000, jetable = h => h.cfg.essai || h.sentAt;
+  let n = 0;
+  const gardees = HIST.filter(h => !jetable(h) || ((h.endedAt || 0) > limite && (!force || ++n <= 20)));
+  const change = gardees.length !== HIST.length; HIST = gardees; return change;
+}
+function loadLive() {
+  let l = [];
+  try { l = (JSON.parse(localStorage.getItem(KEY_LIVE)) || []).filter(s => s && !s.done); } catch (e) {}
+  // Reprise d'une série en cours laissée par la v10
+  try {
+    const old = JSON.parse(localStorage.getItem(KEY));
+    if (old && !old.done && old.T0 != null && !l.some(x => x.uid === old.uid)) { l.push(old); if (ecrire(KEY_LIVE, l)) localStorage.removeItem(KEY); }
+    else if (old) localStorage.removeItem(KEY);
+  } catch (e) {}
+  return l;
+}
 function loadHist() { try { return JSON.parse(localStorage.getItem(KEY_HIST)) || []; } catch (e) { return []; } }
 function fmtDate(ts) { return new Date(ts).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
 // Bouton à deux temps (le navigateur n'affiche pas de fenêtre de confirmation)
@@ -301,14 +369,17 @@ function armed(btn, confirmLabel, action) {
     setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = label; } }, 4000);
   };
 }
-function toast(msg) {
+function toast(msg, ms = 2200) {
+  document.querySelectorAll('.toast').forEach(x => x.remove()); // un seul message à la fois : le dernier
   const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
-  document.body.appendChild(el); setTimeout(() => el.remove(), 2200);
+  document.body.appendChild(el); setTimeout(() => el.remove(), ms);
 }
 
 // ---------- Calcul des temps (§4 du cahier des charges) ----------
 const nb = () => S.cfg.nbRep;
-const cycleMs = () => S.cfg.cycle * 1000;
+// Départ (cycle) entre la rép. k et la suivante : celui de la série, sauf s'il a été changé en cours de route (S.cyc = [{ k, c }]).
+function cycleAt(k) { let c = S.cfg.cycle; for (const x of S.cyc || []) if (x.k <= k) c = x.c; return c; }
+function repOffset(r) { let s = 0; for (let k = 0; k < r; k++) s += cycleAt(k); return s * 1000; }
 function laneOf(id) { return S.lanes.findIndex(l => l.includes(id)); }
 // Pauses : un départ prévu après le début d'une pause est repoussé de la durée de cette pause.
 // Tant que la pause dure, il recule avec l'horloge : son décompte reste figé. Les nageurs déjà partis ne sont pas touchés.
@@ -317,19 +388,19 @@ function decale(t) {
   if (S.pause && t >= S.pause.at) t += Date.now() - S.pause.at;
   return t;
 }
-function dep(id, r) { return decale(S.T0 + r * cycleMs() + (S.order[id][r] - 1) * S.cfg.vague * 1000); }
+function dep(id, r) { return decale(S.T0 + repOffset(r) + (S.order[id][r] - 1) * S.cfg.vague * 1000); }
 // Nombre de répétitions dont la tête de ligne est déjà partie (pauses comprises)
 function repsLancees() {
   if (S.T0 == null) return 0;
   const now = Date.now(); let n = 0;
-  for (let r = 0; r < nb(); r++) if (decale(S.T0 + r * cycleMs()) <= now) n++;
+  for (let r = 0; r < nb(); r++) if (decale(S.T0 + repOffset(r)) <= now) n++;
   return n;
 }
 function pending(id) { return S.res[id].findIndex(x => !x); }
 function expected(id, p) {
   const prev = S.res[id].slice(0, p).reverse().find(x => x && x.st === 'ok');
   const cible = (S.cfg.cibles && S.cfg.cibles[id]) || S.cfg.cible;
-  const est = prev ? prev.t : (cible || S.cfg.cycle * 0.75);
+  const est = prev ? prev.t : (cible || cycleAt(p) * 0.75);
   return dep(id, p) + est * 1000;
 }
 function laneLabel(l) { return (S.cfg.laneNums && S.cfg.laneNums[l]) || l + 1; }
@@ -343,14 +414,40 @@ function newSeries(cfg) {
     for (let i = 0; i < cfg.perLane; i++) { const id = 's' + k; names[id] = NAMES[k++]; ids.push(id); }
     lanes.push(ids);
   }
-  buildSeries(Object.assign({ essai: true, nage: 'NL' }, cfg), lanes, names, {});
+  return buildSeries(Object.assign({ essai: true, nage: 'NL' }, cfg), lanes, names, {});
 }
 function buildSeries(cfg, lanes, names, info) {
   const order = {}, res = {};
   lanes.forEach(ids => ids.forEach((id, i) => { order[id] = Array(cfg.nbRep).fill(i + 1); res[id] = Array(cfg.nbRep).fill(null); }));
-  departPrevu = null;
-  S = { uid: Date.now(), cfg, names, info, lanes, laneOrder: lanes.map(l => [...l]), queue: lanes.map(l => [...l]), order, res, T0: null };
-  syncDisplay(); undoStack = []; save();
+  let uid = Date.now(); while (serie(uid)) uid++;
+  // La nouvelle série s'ajoute aux séries ouvertes : elle ne remplace ni n'efface aucune autre.
+  S = { uid, cfg, names, info, lanes, laneOrder: lanes.map(l => [...l]), queue: lanes.map(l => [...l]), order, res, T0: null };
+  LIVE.push(S); rt().open = true; save();
+  return S;
+}
+// Passages : une même série prête peut être nagée plusieurs fois (blocs séparés par une longue récup, reprise un autre jour).
+// Chaque passage garde ses propres lignes dans le Sheet : « id_serie », puis « id_serie#2 », « id_serie#3 »…
+function passagesFaits(idSerie) {
+  let n = 0; try { n = (JSON.parse(getLS(KEY_RUNS)) || {})[idSerie] || 0; } catch (e) {}
+  // Une série de l'historique sans numéro (nagée avec la v10) compte pour le passage 1.
+  [...LIVE, ...HIST].forEach(x => { if (x.cfg.idSerie === idSerie) n = Math.max(n, x.passage || (x.done ? 1 : 0)); });
+  return n;
+}
+function numeroterPassage() {
+  if (S.passage || S.cfg.essai || !S.cfg.idSerie) return;
+  S.passage = passagesFaits(S.cfg.idSerie) + 1;
+  try { const m = JSON.parse(getLS(KEY_RUNS)) || {}; m[S.cfg.idSerie] = S.passage; setLS(KEY_RUNS, JSON.stringify(m)); } catch (e) {}
+}
+// Relancer une série terminée : mêmes nageurs, mêmes lignes et même ordre qu'à la fin du passage précédent
+// (absents, changements de ligne, nages et réglages faits au bord du bassin sont gardés).
+function relancer(h) {
+  const c = JSON.parse(JSON.stringify(h.cfg));
+  withS(h, () => { c.nages = Object.fromEntries(h.lanes.flat().map(id => [id, nageDe(id, nb() - 1)])); c.cycle = cycleAt(Math.max(0, nb() - 2)); });
+  const lanes = h.laneOrder.map(l => [...l]);
+  c.perLane = Math.max(1, ...lanes.map(l => l.length));
+  buildSeries(c, lanes, Object.assign({}, h.names), JSON.parse(JSON.stringify(h.info)));
+  if ((h.absents || []).length) { S.absents = [...h.absents]; save(); }
+  return S;
 }
 
 // ---------- Lien avec le Google Sheet (Apps Script) ----------
@@ -384,8 +481,11 @@ function seriesPretes() {
 }
 function nagesSerie(rows) { const n = [...new Set(rows.map(r => String(r.nage || '')).filter(Boolean))]; return n.length > 1 ? 'spé (' + n.join('/') + ')' : (n[0] || ''); }
 function fmtJour(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? String(v) : d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }); }
-function startPlanned(id, viewChoice) {
-  const sp = seriesPretes().find(x => x.id === id); if (!sp) return;
+function startPlanned(id) {
+  // Déjà ouverte au bassin (prête ou en cours) : on y retourne, on ne la double pas.
+  const deja = LIVE.find(s => s.cfg.idSerie === id);
+  if (deja) { S = deja; rt().open = true; return deja; }
+  const sp = seriesPretes().find(x => x.id === id); if (!sp) return null;
   const f = sp.f, nag = Object.fromEntries((PLAN.nageurs || []).map(n => [String(n.id_nageur), n]));
   const laneNums = [...new Set(sp.rows.map(r => +r.ligne))].sort((a, b) => a - b);
   // Cible de chaque nageur : celle tapée à la main, sinon celle calculée depuis ses allures (colonne cible_auto_s)
@@ -393,6 +493,8 @@ function startPlanned(id, viewChoice) {
   const cibles = Object.fromEntries(sp.rows.map(r => [String(r.id_nageur), cibleDe(r)]));
   // Série « spé » : chaque nageur nage sa spécialité, la nage est donc propre à chacun
   const nages = Object.fromEntries(sp.rows.map(r => [String(r.id_nageur), String(r.nage || '')]));
+  // Type de série prévu (ANC, AEP…), par nageur : renvoyé au Sheet avec chaque ligne
+  const codes = Object.fromEntries(sp.rows.map(r => [String(r.id_nageur), String(r.type || '')]));
   // Ordre de départ : celui du Sheet ; sinon du plus rapide au plus lent selon les cibles
   const rang = r => (+r.ordre ? +r.ordre : 1000 + (cibleDe(r) || 999));
   const lanes = laneNums.map(L => sp.rows.filter(r => +r.ligne === L).sort((a, b) => rang(a) - rang(b)).map(r => String(r.id_nageur)));
@@ -404,10 +506,10 @@ function startPlanned(id, viewChoice) {
   });
   const nbRep = +f.nb_rep;
   const countReps = [...new Set(String(f.reps_comptage || '').split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= nbRep))].sort((a, b) => a - b);
-  buildSeries({
+  return buildSeries({
     distance: +f.distance, nbRep, cycle: +f.cycle_s, vague: +f.vague_s, bassin: +f.bassin_m || 25, countReps,
-    lanes: lanes.length, perLane: Math.max(...lanes.map(l => l.length)), view: viewChoice,
-    nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cibles, nages, laneNums
+    lanes: lanes.length, perLane: Math.max(...lanes.map(l => l.length)),
+    nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cibles, nages, codes, code: String(f.type || ''), laneNums
   }, lanes, names, info);
 }
 
@@ -420,17 +522,17 @@ function lignesSheet(s) {
   s.lanes.forEach((ids, l) => ids.forEach(id => s.res[id].forEach((x, r) => {
     const cb = cbOf(id, r);
     rows.push({
-      date, groupe: c.groupe, id_serie: c.idSerie, distance: c.distance, nage: nageDe(id, r), bassin_m: c.bassin, nb_rep: c.nbRep,
-      cycle_s: c.cycle, vague_s: c.vague, ligne: laneLabel(l), ordre: s.order[id][r], id_nageur: id,
+      date, groupe: c.groupe, id_serie: c.idSerie + (s.passage > 1 ? '#' + s.passage : ''), distance: c.distance, nage: nageDe(id, r), bassin_m: c.bassin, nb_rep: c.nbRep,
+      cycle_s: cycleAt(r), vague_s: c.vague, ligne: laneLabel(l), ordre: s.order[id][r], id_nageur: id,
       nom: s.info[id].nom, prenom: s.info[id].prenom, rep: r + 1,
       temps_s: x && x.st === 'ok' ? Math.round(x.t * 100) / 100 : '', coups_bras: cb ? cb.map(v => v ?? '').join(';') : '',
-      rpe: rpeOf(id) ?? '', statut: x ? x.st : 'manque', appareil: appareil()
+      rpe: rpeOf(id) ?? '', statut: x ? x.st : 'manque', appareil: appareil(),
+      passage: s.passage || 1, code: (c.codes && c.codes[id]) || c.code || ''
     });
   })));
   S = prev; return rows;
 }
 function aEnvoyer() { return HIST.filter(h => !h.cfg.essai && !h.sentAt); }
-function saveHist() { try { localStorage.setItem(KEY_HIST, JSON.stringify(HIST)); } catch (e) {} }
 async function envoyer(liste) {
   let n = 0;
   for (const s of liste) {
@@ -497,6 +599,7 @@ function setNage(id, n) {
   touched(); save();
 }
 function openNage(id) {
+  layerUid = S.uid;
   const cur = lettreNage(nageDe(id, repCourante(id))), p = pending(id), ouvert = Date.now();
   const portee = S.T0 == null || p < 0 ? 'Pour toute la série.' : `À partir de la rép. ${p + 1} ; les répétitions déjà nagées gardent leur nage.`;
   $('#layer').innerHTML = `
@@ -522,21 +625,34 @@ function tapCarre(id, quoi) {
   if (r >= 0) openPad(id, r); else { flash(id); toast('Coups de bras : après sa première répétition'); }
 }
 
-function snapshot() { return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0, absents: S.absents || [], pauses: S.pauses || [], pause: S.pause || null }); }
-// Chaque action annulable porte un libellé : « Annuler » dit ce qu'il défait (« Léa, arrivée rép. 4 »).
-function pushUndo(label = 'dernière action') { undoStack.push(JSON.stringify({ s: snapshot(), label })); if (undoStack.length > 300) undoStack.shift(); }
-function undo() {
-  const e = undoStack.pop(); if (!e) { toast('Rien à annuler'); return; }
-  const { s, label } = JSON.parse(e);
-  Object.assign(S, JSON.parse(s)); syncDisplay(); save(); render(); toast(`Annulé : ${label}`);
+// Photo de la série avant chaque geste annulable. p : réglages qui peuvent changer au bord du bassin.
+function snapshot() {
+  const c = S.cfg;
+  return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0, absents: S.absents || [], sortis: S.sortis || [],
+    pauses: S.pauses || [], pause: S.pause || null, cyc: S.cyc || [],
+    p: { nbRep: c.nbRep, cycle: c.cycle, vague: c.vague, distance: c.distance, countReps: c.countReps || [], cibles: c.cibles || {}, perLane: c.perLane } });
 }
-function syncDisplay() { display = S.queue.map(q => [...q]); laneTimers.forEach(clearTimeout); }
+// Chaque action annulable porte un libellé : « Annuler » dit ce qu'il défait (« Léa, arrivée rép. 4 »).
+// Une seule pile pour toutes les séries ouvertes : « Annuler » défait le dernier geste, quelle que soit sa série.
+function pushUndo(label = 'dernière action') { undoStack.push({ uid: S.uid, s: snapshot(), label }); if (undoStack.length > 300) undoStack.shift(); }
+function undo() {
+  let e, s = null;
+  while ((e = undoStack.pop())) { s = LIVE.find(x => x.uid === e.uid); if (s) break; }
+  if (!s) { toast('Rien à annuler'); return; }
+  const snap = JSON.parse(e.s), p = snap.p; delete snap.p;
+  S = s; Object.assign(S, snap); Object.assign(S.cfg, p);
+  if (S.T0 == null) rt().open = true; // un départ annulé : la série reste dépliée, prête à repartir
+  syncDisplay(); save(); render(); toast(`Annulé : ${e.label}${LIVE.length > 1 ? ' (' + nomSerie(S) + ')' : ''}`);
+}
+function syncDisplay() { const r = rt(); r.display = S.queue.map(q => [...q]); r.timers.forEach(clearTimeout); }
 function scheduleDisplay(l, delay = DISPLAY_DELAY_MS) {
-  clearTimeout(laneTimers[l]);
-  laneTimers[l] = setTimeout(() => {
+  const s = S, r = rt();
+  clearTimeout(r.timers[l]);
+  r.timers[l] = setTimeout(() => {
     // Jamais de redessin pendant qu'un doigt est posé : le relâcher serait perdu.
-    if (presses.size) { scheduleDisplay(l, 250); return; }
-    display[l] = [...S.queue[l]]; buildGrid();
+    if (presses.size) { withS(s, () => scheduleDisplay(l, 250)); return; }
+    if (!LIVE.includes(s)) return;
+    r.display[l] = [...s.queue[l]]; if (view === 'chrono') buildGrid(s);
   }, delay);
 }
 function moveToEnd(id) { const q = S.queue[laneOf(id)]; q.splice(q.indexOf(id), 1); q.push(id); }
@@ -549,6 +665,9 @@ function tap(id, t) {
   if (t < dep(id, p)) { const r = cbTarget(id); if (r != null) openPad(id, r); else flash(id); return; }
   // Tap oublié : si on est déjà après le départ de la répétition suivante, ce tap lui appartient.
   let q = p; while (q + 1 < nb() && t >= dep(id, q + 1)) q++;
+  // Arrivée après son départ suivant (il n'a pas tenu le départ) : ce tap reste l'arrivée de la répétition qu'il vient de nager,
+  // pas un temps de 2 s sur la suivante. On recule tant que le temps serait impossible.
+  while (q > p && (t - dep(id, q)) / 1000 < tempsMini(id, q)) q--;
   // Tap impossible (goutte d'eau, doigt qui frôle) : arrivée bien trop rapide pour ce nageur → ignoré.
   const duree = (t - dep(id, q)) / 1000;
   if (duree < tempsMini(id, q)) {
@@ -559,11 +678,11 @@ function tap(id, t) {
   while (p < q) { S.res[id][p] = { t: null, st: 'manque', auto: true }; p++; }
   S.res[id][p] = { t: duree, st: 'ok' };
   moveToEnd(id); save(); scheduleDisplay(laneOf(id)); checkFinish();
-  const el = tileEls[id]; if (el) { el.classList.add('tapped'); setTimeout(() => el.classList.remove('tapped'), 600); }
+  const el = tileOf(id); if (el) { el.classList.add('tapped'); setTimeout(() => el.classList.remove('tapped'), 600); }
   bip(1000, 0.07);
 }
-function flash(id) { const el = tileEls[id]; if (!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
-function flashRefus(id) { flash(id); const el = tileEls[id]; if (el) { el.classList.add('refus'); setTimeout(() => el.classList.remove('refus'), 700); } bip(300, 0.15); }
+function flash(id) { const el = tileOf(id); if (!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+function flashRefus(id) { flash(id); const el = tileOf(id); if (el) { el.classList.add('refus'); setTimeout(() => el.classList.remove('refus'), 700); } bip(300, 0.15); }
 // Temps le plus court accepté pour une arrivée : 60 % de son temps habituel (rép. précédente ou cible),
 // et jamais moins de 0,45 s par mètre (≈ 22" au 50), même sans repère.
 function tempsMini(id, r) {
@@ -575,7 +694,7 @@ function tempsMini(id, r) {
 function markPending(id, st) {
   const p = pending(id); if (p < 0) return;
   pushUndo(`${S.names[id]}, rép. ${p + 1} ${st === 'manque' ? 'manquée' : 'non faite'}`); S.res[id][p] = { t: null, st }; moveToEnd(id);
-  display[laneOf(id)] = [...S.queue[laneOf(id)]]; save(); checkFinish();
+  rt().display[laneOf(id)] = [...S.queue[laneOf(id)]]; save(); checkFinish();
 }
 
 // Fin de série : automatique quand chaque nageur a toutes ses répétitions, ou via « Terminer ».
@@ -584,16 +703,29 @@ function cbPending() { return S.lanes.flat().some(id => cbTarget(id) != null); }
 // La série se range seule quand tout est chronométré ET que les coups de bras de la dernière rép. sont notés.
 function checkFinish() {
   if (S.T0 == null || S.done || !allDone() || cbPending()) return;
-  clearTimeout(finishTimer);
-  finishTimer = setTimeout(() => { if (S && !S.done && view === 'chrono' && allDone()) finishSeries(false); }, 1500);
+  const s = S, r = rt(); clearTimeout(r.finish);
+  r.finish = setTimeout(() => {
+    if (s.done || !LIVE.includes(s) || view !== 'chrono') return;
+    const prev = S; S = s;
+    if (allDone() && !cbPending()) finishSeries(false);
+    if (view !== 'recap') S = prev; // resté au bassin : on rend la main à la série d'avant
+  }, 1500);
 }
+// La série quitte les séries ouvertes et entre dans l'historique. Les autres séries ouvertes ne sont pas touchées.
+// manual : ce qui n'a pas été nagé est « non faite » ; seul un nageur parti et jamais tapé est « manqué ».
 function finishSeries(manual) {
-  if (manual) S.lanes.flat().forEach(id => S.res[id].forEach((x, r) => { if (!x) S.res[id][r] = { t: null, st: 'manque' }; }));
-  S.done = true; S.endedAt = Date.now();
-  try { localStorage.removeItem(KEY); } catch (e) {}
-  save(); undoStack = []; clearTimeout(finishTimer);
-  try { if (wakeLock) wakeLock.release(); } catch (e) {}
-  closeLayer(); view = 'recap'; render(); toast("Série terminée · rangée dans l'historique");
+  const s = S, now = Date.now();
+  if (manual) s.lanes.flat().forEach(id => s.res[id].forEach((x, r) => { if (!x) s.res[id][r] = { t: null, st: s.T0 != null && now >= dep(id, r) ? 'manque' : 'non_faite' }; }));
+  s.done = true; s.endedAt = now; s.pause = null;
+  LIVE = LIVE.filter(x => x !== s); HIST = HIST.filter(x => x.uid !== s.uid); HIST.unshift(s);
+  if (saveHist()) saveLive(); // si l'historique ne s'écrit pas, la série reste rangée parmi les séries ouvertes : rien n'est perdu
+  undoStack = undoStack.filter(e => e.uid !== s.uid);
+  const r = RT[s.uid]; if (r) { clearTimeout(r.finish); r.timers.forEach(clearTimeout); delete RT[s.uid]; }
+  if (pad && pad.uid === s.uid) closePad();
+  if (layerUid === s.uid) closeLayer();
+  if (!LIVE.some(started)) { try { if (wakeLock) wakeLock.release(); } catch (e) {} }
+  if (view === 'chrono' && LIVE.length) { render(); toast(`${nomSerie(s)} terminée · touche ✓ en haut pour son récap et les RPE`, 3500); }
+  else { S = s; view = 'recap'; render(); toast("Série terminée · rangée dans l'historique"); }
   setTimeout(autoEnvoi, 1500);
 }
 function setResult(id, r, val) { pushUndo(); S.res[id][r] = val; touched(); save(); }
@@ -605,7 +737,7 @@ function moveInOrder(id, dir) {
   [arr[i], arr[j]] = [arr[j], arr[i]];
   const from = nextCycle();
   arr.forEach((sid, idx) => { for (let r = from; r < nb(); r++) S.order[sid][r] = idx + 1; });
-  if (S.T0 == null) { S.queue[l] = [...arr]; display[l] = [...arr]; }
+  if (S.T0 == null) { S.queue[l] = [...arr]; rt().display[l] = [...arr]; }
   save(); return from;
 }
 // Change un nageur de ligne d'eau : il part en dernier dans sa nouvelle ligne, à partir de la répétition suivante.
@@ -634,11 +766,12 @@ function withdraw(id) {
   const p = pending(id), l = laneOf(id); if (S.T0 == null || p < 0) return;
   pushUndo(`${S.names[id]} sorti de l'eau`);
   for (let r = p; r < nb(); r++) if (!S.res[id][r]) S.res[id][r] = { t: null, st: 'non_faite' };
-  moveToEnd(id); display[l] = [...S.queue[l]]; touched(); save(); checkFinish();
+  S.sortis = [...(S.sortis || []), id]; // une répétition ajoutée ensuite ne le concerne pas
+  moveToEnd(id); rt().display[l] = [...S.queue[l]]; touched(); save(); checkFinish();
 }
 // Ajout d'un nageur (avant le départ), pris dans la liste Nageurs du Sheet, tous groupes : il part en dernier dans sa ligne.
 // Pas de cible (aucune référence pour lui dans cette série) ; dans une série spé, il nage sa spé.
-function addSwimmer(id, l) {
+function addSwimmer(id, l) { // avant le départ uniquement
   const n = (PLAN && PLAN.nageurs || []).find(x => String(x.id_nageur) === id);
   if (S.T0 != null || !n || laneOf(id) >= 0) return;
   pushUndo();
@@ -655,6 +788,7 @@ function addSwimmer(id, l) {
   syncDisplay(); save();
 }
 function openAdd() {
+  layerUid = S.uid;
   const actif = n => n.actif !== false && String(n.actif).toUpperCase() !== 'FALSE';
   const libres = (PLAN && PLAN.nageurs || []).filter(n => actif(n) && laneOf(String(n.id_nageur)) < 0);
   const groupes = [...new Set(libres.map(n => String(n.groupe)))].sort((a, b) => (a === S.cfg.groupe) - (b === S.cfg.groupe) || a.localeCompare(b));
@@ -681,7 +815,6 @@ function leadRep() { return repsLancees(); }
 // On touche « Caler » quand l'aiguille passe au 60 : l'app retient ce calage (phase dans la minute) sur l'appareil.
 // Ensuite « Au prochain 60 / 30 » programme le départ : décompte, bips 3-2-1, et le chrono part tout seul.
 const KEY_TROT = 'chrono-trotteuse';
-let departPrevu = null, dernierBip = null, departMarque = 60;
 function phaseTrotteuse() { const v = getLS(KEY_TROT); return v === null || v === '' ? null : Number(v); }
 function calerTrotteuse() { setLS(KEY_TROT, String(Date.now() % 60000)); }
 // marque : position de l'aiguille au moment du départ (60 = en haut, 30 = en bas). Un tour d'aiguille = 60 s.
@@ -694,7 +827,12 @@ function prochainTop(marque) {
 }
 // Où l'app situe l'aiguille (1 à 60) : à comparer d'un coup d'œil avec la trotteuse du bassin.
 function aiguille(now) { return Math.floor(((((now - phaseTrotteuse()) % 60000) + 60000) % 60000) / 1000) || 60; }
-function lancerDepart(t0) { pushUndo(); S.T0 = t0; S.pauses = []; S.pause = null; save(); keepAwake(); bip(1500, 0.35); renderChrono(); }
+function lancerDepart(t0) {
+  pushUndo(`départ de ${nomSerie(S)}`);
+  S.T0 = t0; S.pauses = []; S.pause = null; numeroterPassage();
+  const r = rt(); r.departPrevu = null; r.bip = null;
+  save(); keepAwake(); bip(1500, 0.35); renderChrono();
+}
 
 // ---------- Pause : fige les départs à venir, pas les nageurs déjà dans l'eau ----------
 // À la reprise, tous les départs restants sont décalés de la durée de la pause ; le prochain laisse au moins 5 s pour se placer.
@@ -719,6 +857,7 @@ function reprendre(cible) {
   toast(cible ? `Reprise · prochain départ dans ${Math.round((cible - now) / 1000)}"` : `Reprise · départs décalés de ${Math.round(dur / 1000)}"`);
 }
 function openReprise() {
+  layerUid = S.uid;
   const cale = phaseTrotteuse() != null;
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Reprendre la série">
@@ -768,7 +907,7 @@ async function keepAwake() {
 ['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
 document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
 document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && view === 'chrono' && S && S.T0) keepAwake(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && LIVE.some(started)) keepAwake(); });
 
 // ---------- Écran Préparation ----------
 let chargement = false, echecChargement = 0;
@@ -786,26 +925,26 @@ async function autoChargement(demande) {
 }
 
 function renderSetup() {
-  const live = load();
-  const saved = live && live.T0 != null;
+  const enCours = LIVE.filter(started).length;
   // Le formulaire d'essai ne reprend que les réglages d'un essai précédent, jamais ceux d'une vraie série (sinon on les confond).
-  const lastEssai = [live, ...HIST].find(h => h && h.cfg.essai);
+  const lastEssai = [...LIVE, ...HIST].find(h => h && h.cfg.essai);
   const c = Object.assign({ distance: 100, nbRep: 8, cycle: 100, vague: 10, lanes: 3, perLane: 4, bassin: 25 }, lastEssai ? lastEssai.cfg : {});
-  c.view = getLS('chrono-vue') || ((live || HIST[0] || {}).cfg || {}).view || 'cote-haut';
+  c.view = vue();
   const cbDefault = c.countReps ? c.countReps.join(';') : [...new Set([1, Math.ceil(c.nbRep / 2), c.nbRep])].join(';');
   const VIEWS = [['cote-haut', 'Côté du bassin · ligne 1 en haut'], ['cote-bas', 'Côté du bassin · ligne 1 en bas'], ['bout-gauche', 'Bout du bassin · ligne 1 à gauche'], ['bout-droite', 'Bout du bassin · ligne 1 à droite']];
   const secret = getLS(KEY_SECRET), sp = seriesPretes(), pend = aEnvoyer();
   $('#app').innerHTML = `
   <div class="view"><div class="scroll"><div class="panel">
     <h1>Chrono multi-nageurs</h1>
-    ${saved ? `<div class="actions"><button class="btn go big" id="resume">Reprendre : ${live.cfg.essai ? 'essai (nageurs fictifs)' : esc(live.cfg.groupe)} · ${live.cfg.nbRep} × ${live.cfg.distance}</button></div>` : ''}
+    ${LIVE.length ? `<div class="actions"><button class="btn go big" id="resume">Au bassin · ${LIVE.length} série${LIVE.length > 1 ? 's' : ''} ouverte${LIVE.length > 1 ? 's' : ''}${enCours ? ` · ${enCours} en cours` : ''}</button></div>
+      <p class="note">${LIVE.map(s => esc(nomSerie(s)) + (started(s) ? ' (en cours)' : ' (prête)')).join(' · ')}. Elles restent sur l'appareil tant que tu ne les as pas terminées ou retirées.</p>` : ''}
     <h2>Séries prêtes</h2>
     ${secret ? `
       ${(() => {
         // Séries du jour et à venir d'abord ; les passées repliées
         const jour = new Date(); jour.setHours(0, 0, 0, 0);
         const quand = x => { const d = new Date(x.f.date_prevue); return isNaN(d) ? jour : d; };
-        const bouton = x => `<button class="hist-item plan-item" data-id="${esc(x.id)}"><b>${esc(x.f.groupe)} · ${x.f.nb_rep} × ${x.f.distance} ${esc(nagesSerie(x.rows))} · départ ${fmtCycle(+x.f.cycle_s)} · vagues ${x.f.vague_s}" · ${x.rows.length} nageurs</b><span>${fmtJour(x.f.date_prevue)}</span></button>`;
+        const bouton = x => boutonPlan(x);
         const tri = sp.slice().sort((a, b) => quand(a) - quand(b));
         const venir = tri.filter(x => quand(x) >= jour), passees = tri.filter(x => quand(x) < jour).reverse();
         return (venir.length ? `<div class="hist">${venir.map(bouton).join('')}</div>` : PLAN ? '<p class="note">Aucune série prévue aujourd\'hui ou plus tard.</p>' : '')
@@ -836,9 +975,8 @@ function renderSetup() {
     <p class="note">Exemple de départ : 1'40 s'écrit <b>1:40</b>.</p>
     <div class="actions"><button class="btn go" id="start">Préparer la série d'essai</button></div>
     </details>
-    ${saved ? `<p class="note">Démarrer une autre série abandonne la série en cours.</p>` : ''}
     <h2>Historique</h2>
-    ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.essai ? 'Essai' : esc(h.cfg.groupe)} · ${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)} · ${h.cfg.essai ? 'essai' : h.sentAt ? 'envoyée ✓' : 'à envoyer'}</span></button>`).join('')}</div>`
+    ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.essai ? 'Essai' : esc(h.cfg.groupe) + ' · ' + esc(nomSerie(h))} · ${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)} · ${h.cfg.essai ? 'essai' : h.sentAt ? 'envoyée ✓' : 'à envoyer'}</span></button>`).join('')}</div>`
       : `<p class="note">Les séries terminées arrivent ici. Tu pourras encore y corriger les temps.</p>`}
 
     <details class="essai"><summary>Réglages</summary>
@@ -849,13 +987,12 @@ function renderSetup() {
       <p class="note">Trotteuse : ${phaseTrotteuse() == null ? 'pas encore calée (bouton « Caler » avant le départ d\'une série).' : 'calée sur cet appareil. Recale-la si tu changes de bassin ou si l\'horloge a été réglée.'}</p>
     </details>
   </div></div></div>`;
-  const viewNow = () => $('#f-view').value;
   $('#f-view').onchange = () => setLS('chrono-vue', $('#f-view').value);
   $('#f-son').onclick = () => { setLS(KEY_SON, sonActif() ? '0' : '1'); bip(1000, 0.07); render(); };
   if ($('#f-oubli')) armed($('#f-oubli'), 'Confirmer : saisir un nouveau code', () => { setLS(KEY_SECRET, ''); render(); });
-  if (saved) $('#resume').onclick = () => { S = live; syncDisplay(); undoStack = []; view = 'chrono'; keepAwake(); render(); };
+  if ($('#resume')) $('#resume').onclick = () => { view = 'chrono'; if (enCours) keepAwake(); render(); };
   $('#app').querySelectorAll('.hist-item[data-i]').forEach(b => b.onclick = () => { S = HIST[+b.dataset.i]; view = 'recap'; render(); });
-  $('#app').querySelectorAll('.plan-item').forEach(b => b.onclick = () => { startPlanned(b.dataset.id, viewNow()); view = 'chrono'; render(); });
+  $('#app').querySelectorAll('.plan-item').forEach(b => b.onclick = () => { if (startPlanned(b.dataset.id)) { view = 'chrono'; render(); } });
   if ($('#save-secret')) $('#save-secret').onclick = () => {
     const v = $('#f-secret').value.trim(); if (!v) { toast('Saisis le code secret du Sheet'); return; }
     setLS(KEY_SECRET, v); render(); toast('Code secret enregistré sur cet appareil');
@@ -874,64 +1011,245 @@ function renderSetup() {
     if (!cycle) { toast('Cycle illisible : écris par exemple 1:40'); return; }
     const nbRep = Math.max(1, Math.min(30, parseInt($('#f-rep').value, 10) || 1));
     const countReps = [...new Set($('#f-cb').value.split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= nbRep))].sort((a, b) => a - b);
-    newSeries({ distance: parseInt($('#f-dist').value, 10) || 100, nbRep, cycle, bassin: +$('#f-pool').value, countReps, vague: +$('#f-vag').value, lanes: +$('#f-lanes').value, perLane: +$('#f-per').value, view: viewNow() });
+    newSeries({ distance: parseInt($('#f-dist').value, 10) || 100, nbRep, cycle, bassin: +$('#f-pool').value, countReps, vague: +$('#f-vag').value, lanes: +$('#f-lanes').value, perLane: +$('#f-per').value });
     view = 'chrono'; render();
   };
 }
+// Écart au temps cible : « +0,4" » (plus lent) ou « −0,6" » (plus vite)
+function fmtEcart(d) { return (d >= 0 ? '+' : '−') + Math.abs(d).toFixed(1).replace('.', ',') + '"'; }
+function cibleDe(id) { return (S.cfg.cibles && S.cfg.cibles[id]) || null; }
 function fmtCycle(sec) { const m = Math.floor(sec / 60), s = Math.round(sec - m * 60); return `${m}:${String(s).padStart(2, '0')}`; }
 
-// ---------- Écran Chrono ----------
+// Bouton d'une série prête (accueil et « + Série ») : où elle en est sur cet appareil
+function etatPlan(id) {
+  const l = LIVE.find(s => s.cfg.idSerie === id), n = HIST.filter(h => h.cfg.idSerie === id).length;
+  return l ? (started(l) ? ' · en cours' : ' · ouverte au bassin') : n ? ` · ✓ ${n} passage${n > 1 ? 's' : ''}` : '';
+}
+function boutonPlan(x) {
+  return `<button class="hist-item plan-item" data-id="${esc(x.id)}"><b>${esc(x.f.groupe)} · ${esc(String(x.id).replace(/^.*?-\d{8}-/, ''))} · ${x.f.nb_rep} × ${x.f.distance} ${esc(nagesSerie(x.rows))} · départ ${fmtCycle(+x.f.cycle_s)} · vagues ${x.f.vague_s}" · ${x.rows.length} nageurs</b><span>${fmtJour(x.f.date_prevue)}${etatPlan(x.id)}</span></button>`;
+}
+
+// ---------- Écran Bassin : toutes les séries ouvertes sur un seul écran ----------
+// Une bande par série dépliée (son bandeau + ses lignes d'eau). Une série prête et repliée est une carte en haut, avec son bouton Départ.
+// Une série partie est toujours dépliée : ses arrivées doivent rester tapables.
+function vue() { return getLS('chrono-vue') || 'cote-haut'; }
+function isBout() { return vue().startsWith('bout'); }
+function depliee(s) { return started(s) || rt(s).open === true || LIVE.length === 1; }
+// Séries terminées pendant la séance (5 dernières heures) : un ✓ en haut de l'écran, pour le récap, les RPE et « Relancer »
+function recentes() { const lim = Date.now() - 5 * 3600000; return HIST.filter(h => h.endedAt > lim).slice(0, 12).reverse(); }
 function renderChrono() {
-  const c = S.cfg;
+  const cartes = LIVE.filter(s => !depliee(s)), bandes = LIVE.filter(depliee), finies = recentes(), bout = isBout();
   $('#app').innerHTML = `
   <div class="view">
-    <div class="bar">
-      <div class="clock num" id="clock">00:00</div>
-      <div class="rep num" id="rep"></div>
-      ${S.cfg.essai ? '<span class="tag-essai">Essai · nageurs fictifs</span>' : ''}
-      <div class="spacer"></div>
-      ${S.T0 == null ? `<button class="btn go big" id="go">Départ</button>${!S.cfg.essai && PLAN ? '<button class="btn" id="add">+ Nageur</button>' : ''}<button class="btn" id="home">Accueil</button>` : ''}
-      ${S.T0 != null ? '<button class="btn" id="pause">⏸ Pause</button><button class="btn" id="top">⟲ Top 60</button>' : ''}
-      <button class="btn" id="recap">Récap</button>
+    <div class="bar top">
+      <button class="btn" id="home">Accueil</button>
+      ${PLAN ? '<button class="btn" id="plus">+ Série</button>' : ''}
+      <div class="chips">
+        ${cartes.map(s => `<span class="carte"><button class="carte-nom" data-open="${s.uid}">▸ ${esc(nomSerie(s))} · ${detailSerie(s)} · ${s.lanes.flat().length} nag.</button><button class="carte-go" data-go="${s.uid}">Départ</button></span>`).join('')}
+        ${finies.map(h => `<button class="chip fini" data-fini="${h.uid}">✓ ${esc(nomSerie(h))}${withS(h, rpeMissing) ? ' · RPE' : ''}</button>`).join('')}
+      </div>
       <button class="btn big undo" id="undo">↶ Annuler</button>
     </div>
-    ${S.T0 == null ? `<div class="bar trot">
-      <span class="note" id="trot-info"></span><div class="spacer"></div>
-      ${phaseTrotteuse() != null ? `<button class="btn go" id="t60">Au prochain 60 · <span class="num" id="t60s"></span></button><button class="btn" id="t30">Au prochain 30 · <span class="num" id="t30s"></span></button>` : ''}
-      ${departPrevu ? `<button class="btn danger" id="tstop">Annuler le départ programmé</button>` : ''}
-      <button class="btn" id="tcal">${phaseTrotteuse() != null ? '⟲ Recaler' : 'Caler sur la trotteuse'}</button>
-    </div>` : ''}
-    <div class="lanes ${c.perLane > 4 ? 'dense' : ''}" id="lanes" style="${isBout() ? 'grid-template-columns' : 'grid-template-rows'}: repeat(${c.lanes}, minmax(0, 1fr))"></div>
+    <div class="bands ${bout ? 'bout' : ''}" id="bands">
+      ${bandes.map(s => `<section class="band" style="flex: ${Math.max(1, s.lanes.length)} 1 0; ${bout ? '' : `min-height: ${50 + 66 * Math.max(1, s.lanes.length)}px`}"><div class="bhead" id="bh-${s.uid}"></div><div class="lanes" id="lanes-${s.uid}"></div></section>`).join('')}
+      ${bandes.length ? '' : `<p class="note">${LIVE.length ? 'Touche une série en haut pour la déplier, ou « Départ » pour la lancer.' : 'Plus aucune série ouverte. « + Série » pour en ajouter, ✓ pour revoir une série terminée.'}</p>`}
+    </div>
     <div id="padbox"></div>
   </div>`;
-  pad = null;
-  if (S.T0 == null) {
-    $('#go').onclick = () => { departPrevu = null; lancerDepart(Date.now()); };
-    $('#tcal').onclick = () => { calerTrotteuse(); bip(1200, 0.12); toast('Trotteuse calée : touche au passage du 60, c\'est fait'); renderChrono(); };
-    if ($('#t60')) $('#t60').onclick = () => { departPrevu = prochainTop(60); departMarque = 60; renderChrono(); };
-    if ($('#t30')) $('#t30').onclick = () => { departPrevu = prochainTop(30); departMarque = 30; renderChrono(); };
-    if ($('#tstop')) $('#tstop').onclick = () => { departPrevu = null; renderChrono(); };
-    $('#home').onclick = () => { view = 'setup'; render(); };
-    if ($('#add')) $('#add').onclick = openAdd;
-  } // « Terminer » est dans le Récap : loin d'« Annuler », qui sert sans cesse
-  $('#undo').onclick = undo;
-  if ($('#pause')) $('#pause').onclick = () => (S.pause ? openReprise() : pauser());
-  if ($('#top')) $('#top').onclick = topMural;
-  $('#recap').onclick = () => { view = 'recap'; render(); };
-  buildGrid(); tick();
+  $('#home').onclick = () => { view = 'setup'; render(); };
+  if ($('#plus')) $('#plus').onclick = openPlus;
+  $('#undo').onclick = undo; // « Terminer » est dans ⚙ et dans le Récap : loin d'« Annuler », qui sert sans cesse
+  $('#app').querySelectorAll('[data-open]').forEach(b => b.onclick = () => { const s = serie(b.dataset.open); if (s) { S = s; rt().open = true; renderChrono(); } });
+  $('#app').querySelectorAll('[data-go]').forEach(b => b.onclick = () => { const s = serie(b.dataset.go); if (s && !started(s)) { S = s; lancerDepart(Date.now()); } });
+  $('#app').querySelectorAll('[data-fini]').forEach(b => b.onclick = () => { const s = serie(b.dataset.fini); if (s) { S = s; view = 'recap'; render(); } });
+  bandes.forEach(renderHead);
+  buildGrid();
+  if (pad) renderPad();
+}
+// Bandeau d'une série : avant le départ (Départ, trotteuse, + Nageur, Régler) ou en cours (chrono, rép., Pause, Récap, Ajuster)
+function renderHead(s) {
+  const h = $('#bh-' + s.uid); if (!h) return;
+  const r = rt(s), essai = s.cfg.essai ? '<span class="tag-essai">Essai</span>' : '';
+  if (!started(s)) {
+    const cale = phaseTrotteuse() != null;
+    h.innerHTML = `<button class="b-nom" data-a="plier">${LIVE.length > 1 ? '▾ ' : ''}<b>${esc(nomSerie(s))}</b> ${detailSerie(s)} · départ ${fmtCycle(s.cfg.cycle)} · vagues ${s.cfg.vague}"</button>${essai}
+      <span class="b-info"></span><div class="spacer"></div>
+      <button class="btn go big" data-a="go">Départ</button>
+      ${cale ? `<button class="btn" data-a="t60">Au 60 · <span class="num b-t60"></span></button><button class="btn" data-a="t30">Au 30 · <span class="num b-t30"></span></button>` : ''}
+      ${r.departPrevu ? '<button class="btn danger" data-a="tstop">Annuler le départ programmé</button>' : ''}
+      <button class="btn" data-a="tcal">${cale ? '⟲ Recaler' : 'Caler la trotteuse'}</button>
+      ${!s.cfg.essai && PLAN ? '<button class="btn" data-a="add">+ Nageur</button>' : ''}
+      <button class="btn" data-a="regler">⚙ Régler</button>`;
+  } else {
+    h.innerHTML = `<span class="b-nom"><b>${esc(nomSerie(s))}</b> ${detailSerie(s)}</span>${essai}
+      <span class="b-clock num"></span><span class="b-rep num"></span><div class="spacer"></div>
+      <button class="btn" data-a="pause">⏸ Pause</button>
+      <button class="btn go" data-a="ranger" hidden>✓ Ranger</button>
+      <button class="btn" data-a="recap">Récap</button>
+      <button class="btn" data-a="ajuster">⚙ Ajuster</button>`;
+  }
+  h.querySelectorAll('[data-a]').forEach(b => b.onclick = () => { if (!LIVE.includes(s)) return; S = s; headAction(b.dataset.a); });
+}
+function headAction(a) {
+  const r = rt();
+  if (a === 'plier') { if (LIVE.length > 1) { r.open = false; renderChrono(); } }
+  else if (a === 'go') lancerDepart(Date.now());
+  else if (a === 't60' || a === 't30') { r.marque = a === 't60' ? 60 : 30; r.departPrevu = prochainTop(r.marque); r.bip = null; renderChrono(); }
+  else if (a === 'tstop') { r.departPrevu = null; renderChrono(); }
+  else if (a === 'tcal') { calerTrotteuse(); bip(1200, 0.12); toast('Trotteuse calée : touche au passage du 60, c\'est fait'); renderChrono(); }
+  else if (a === 'add') openAdd();
+  else if (a === 'regler') openRegler();
+  else if (a === 'pause') (S.pause ? openReprise() : pauser());
+  else if (a === 'ranger') finishSeries(true);
+  else if (a === 'recap') { view = 'recap'; render(); }
+  else if (a === 'ajuster') openAjuster();
+}
+// « + Série » : ajouter au bassin une série prête du jour, sans quitter les séries en cours
+function openPlus() {
+  layerUid = null;
+  const jour = new Date(); jour.setHours(0, 0, 0, 0);
+  const quand = x => { const d = new Date(x.f.date_prevue); return isNaN(d) ? jour : d; };
+  const liste = seriesPretes().filter(x => quand(x) >= jour).sort((a, b) => quand(a) - quand(b));
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" style="width:min(760px,100%)" role="dialog" aria-label="Ajouter une série">
+    <h2>Ajouter une série au bassin</h2>
+    ${liste.length ? `<div class="hist">${liste.map(boutonPlan).join('')}</div>` : '<p class="note">Aucune série prête aujourd\'hui ou plus tard. Actualise la liste depuis l\'accueil.</p>'}
+    <p class="note">La série s'ajoute en haut de l'écran, prête à partir. Une série déjà terminée repart pour un nouveau passage, sans rien écraser.</p>
+    <button class="btn big" id="p-close">Fermer</button>
+  </div></div>`;
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+  $('#p-close').onclick = closeLayer;
+  $('#layer').querySelectorAll('.plan-item').forEach(b => b.onclick = () => {
+    const deja = LIVE.some(s => s.cfg.idSerie === b.dataset.id), s = startPlanned(b.dataset.id); if (!s) return;
+    if (!deja && LIVE.length > 1) rt(s).open = false; // elle attend en carte, sans prendre de place aux séries en cours
+    renderChrono(); openPlus(); toast(deja ? `${nomSerie(s)} est déjà au bassin` : `${nomSerie(s)} ajoutée`);
+  });
+}
+
+// ---------- Réglages au bord du bassin ----------
+// Change le nombre de répétitions en gardant tout ce qui est déjà nagé.
+function setNbRep(n) {
+  const sortis = S.sortis || [];
+  Object.keys(S.res).forEach(id => {
+    const o = S.order[id], x = S.res[id];
+    S.order[id] = Array.from({ length: n }, (_, r) => o[Math.min(r, o.length - 1)]);
+    S.res[id] = Array.from({ length: n }, (_, r) => (r < x.length ? x[r] : sortis.includes(id) ? { t: null, st: 'non_faite' } : null));
+    const a = S.nagesRep && S.nagesRep[id];
+    if (a) S.nagesRep[id] = Array.from({ length: n }, (_, r) => a[Math.min(r, a.length - 1)]);
+  });
+  S.cfg.nbRep = n;
+  S.cfg.countReps = (S.cfg.countReps || []).filter(k => k <= n);
+}
+// Avant le départ : répétitions, départ, vague, distance, répétitions comptées
+function openRegler() {
+  layerUid = S.uid; const c = S.cfg;
+  const vagues = [...new Set([5, 10, 15, 20, 30, +c.vague])].sort((a, b) => a - b);
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" style="width:min(560px,100%)" role="dialog" aria-label="Régler la série">
+    <h2>Régler · ${esc(nomSerie(S))}</h2>
+    <div class="form">
+      <div class="field"><label for="g-rep">Répétitions</label><input id="g-rep" type="number" inputmode="numeric" min="1" max="40" value="${c.nbRep}"></div>
+      <div class="field"><label for="g-cyc">Départ (cycle)</label><input id="g-cyc" type="text" inputmode="decimal" value="${fmtCycle(c.cycle)}"></div>
+      <div class="field"><label for="g-vag">Vague</label><select id="g-vag">${vagues.map(v => `<option value="${v}" ${v == c.vague ? 'selected' : ''}>${v}"</option>`).join('')}</select></div>
+      <div class="field"><label for="g-dist">Distance (m)</label><input id="g-dist" type="number" inputmode="numeric" value="${c.distance}"></div>
+      <div class="field"><label for="g-cb">Rép. avec coups de bras</label><input id="g-cb" type="text" inputmode="numeric" value="${(c.countReps || []).join(';')}"></div>
+    </div>
+    <p class="note">Départ 1'40 s'écrit <b>1:40</b>. Changer la distance retire les temps cibles : ils valaient pour ${c.distance} m.</p>
+    <button class="btn go big" id="g-ok">Enregistrer</button>
+    <button class="btn danger" id="g-del">Retirer du bassin (elle ne sera pas nagée)</button>
+    <button class="btn big" id="g-close">Fermer</button>
+  </div></div>`;
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+  $('#g-close').onclick = closeLayer;
+  $('#g-ok').onclick = () => {
+    const cycle = parseTime($('#g-cyc').value);
+    if (!cycle) { toast('Départ illisible : écris par exemple 1:40'); return; }
+    const n = Math.max(1, Math.min(40, parseInt($('#g-rep').value, 10) || c.nbRep)), dist = parseInt($('#g-dist').value, 10) || c.distance;
+    pushUndo(`réglages de ${nomSerie(S)}`);
+    c.countReps = [...new Set($('#g-cb').value.split(/[^0-9]+/).map(Number).filter(k => k >= 1))].sort((a, b) => a - b);
+    setNbRep(n); c.cycle = cycle; c.vague = +$('#g-vag').value;
+    if (dist !== c.distance) { c.distance = dist; c.cibles = {}; S.cb = {}; }
+    save(); closeLayer(); renderChrono(); toast(`${nomSerie(S)} : ${n} × ${dist} · départ ${fmtCycle(cycle)} · vagues ${c.vague}"`);
+  };
+  armed($('#g-del'), 'Confirmer : retirer du bassin', () => {
+    const s = S; LIVE = LIVE.filter(x => x !== s); undoStack = undoStack.filter(e => e.uid !== s.uid); delete RT[s.uid];
+    if (pad && pad.uid === s.uid) closePad();
+    saveLive(); closeLayer(); S = null; render(); toast(`${nomSerie(s)} retirée du bassin`);
+  });
+}
+// En cours de série. Les temps déjà pris ne bougent jamais.
+function plusRep() {
+  const now = Date.now(), n = nb();
+  pushUndo(`+1 répétition (${nomSerie(S)})`);
+  setNbRep(n + 1);
+  if ((S.cfg.countReps || []).includes(n)) S.cfg.countReps.push(n + 1); // la dernière était comptée : la nouvelle dernière l'est aussi
+  // Si son départ est déjà passé (série finie ou presque), elle part dans 10 s.
+  const d = decale(S.T0 + repOffset(n));
+  if (!S.pause && d < now + 5000) S.pauses = [...(S.pauses || []), { at: d, dur: now + 10000 - d }];
+  touched(); save();
+}
+function arreterApres() {
+  const L = repsLancees(); if (L < 1 || L >= nb()) return false;
+  pushUndo(`arrêt après la rép. ${L} (${nomSerie(S)})`);
+  setNbRep(L); touched(); save(); checkFinish(); return true;
+}
+// Nouveau départ (cycle) pour les répétitions à venir. Le prochain départ n'est jamais ramené à moins de 5 s :
+// dans ce cas le changement vaut à partir du départ suivant. Renvoie le n° de la 1re répétition qui part au nouveau cycle.
+function changerDepart(c) {
+  const L = repsLancees(); if (L < 1 || L >= nb()) return null;
+  const avant = S.cyc || [], essai = k => avant.filter(x => x.k < k).concat({ k, c });
+  pushUndo(`départ ${fmtCycle(c)} (${nomSerie(S)})`);
+  let k = L - 1; S.cyc = essai(k);
+  if (decale(S.T0 + repOffset(L)) < Date.now() + 5000) {
+    k = L; if (k > nb() - 2) { S.cyc = avant; undoStack.pop(); return null; }
+    S.cyc = essai(k);
+  }
+  touched(); save(); return k + 2;
+}
+function openAjuster() {
+  layerUid = S.uid;
+  const L = repsLancees(), reste = nb() - L;
+  $('#layer').innerHTML = `
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Ajuster la série">
+    <h2>Ajuster · ${esc(nomSerie(S))}</h2>
+    <p class="note">Rép. ${L} / ${nb()} lancée${L > 1 ? 's' : ''} · départ ${fmtCycle(cycleAt(Math.max(0, L - 1)))}. Les temps déjà pris sont gardés.</p>
+    <button class="btn" id="j-plus">+1 répétition (${nb()} → ${nb() + 1})</button>
+    ${reste > 0 ? `<button class="btn danger" id="j-stop">Arrêter après la rép. ${L} (${reste} rép. retirée${reste > 1 ? 's' : ''})</button>
+    <div class="field"><label for="j-cyc">Nouveau départ pour les rép. à venir</label>
+      <div class="row"><input id="j-cyc" type="text" inputmode="decimal" value="${fmtCycle(cycleAt(Math.max(0, L - 1)))}"><button class="btn go" id="j-cyc-ok">Appliquer</button></div></div>` : ''}
+    <button class="btn" id="j-top">⟲ Top 60 : recaler sur l'horloge du bassin</button>
+    <button class="btn danger" id="j-end">Terminer la série maintenant</button>
+    <button class="btn big" id="j-close">Fermer</button>
+  </div></div>`;
+  $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+  $('#j-close').onclick = closeLayer;
+  $('#j-plus').onclick = () => { plusRep(); closeLayer(); renderChrono(); toast(`${nomSerie(S)} : ${nb()} répétitions`); };
+  if (reste > 0) {
+    armed($('#j-stop'), `Confirmer : arrêter après la rép. ${L}`, () => { if (arreterApres()) { closeLayer(); if (LIVE.includes(S)) renderChrono(); toast(`${nomSerie(S)} : arrêt après la rép. ${L}`); } });
+    $('#j-cyc-ok').onclick = () => {
+      const c = parseTime($('#j-cyc').value);
+      if (!c) { toast('Départ illisible : écris par exemple 1:40'); return; }
+      const r = changerDepart(c); closeLayer(); tick();
+      toast(r ? `Départ ${fmtCycle(c)} à partir de la rép. ${r}` : 'Plus de départ à venir : rien ne change');
+    };
+  }
+  $('#j-top').onclick = () => { closeLayer(); topMural(); };
+  armed($('#j-end'), 'Confirmer : terminer la série', () => finishSeries(true));
 }
 
 // Pavé docké en bas : il ne recouvre pas les tuiles, les arrivées restent tapables pendant la saisie.
-let pad = null; // { id, r, i: longueur en cours, buf: chiffres tapés }
+let pad = null; // { uid: sa série, id, r, i: longueur en cours, buf: chiffres tapés }
 function openPad(id, r) {
   const a = cbOf(id, r) || [];
   const i = Math.max(0, Array.from({ length: nLen() }, (_, k) => a[k]).findIndex(v => v == null));
-  pad = { id, r, i: Math.min(i, nLen() - 1), buf: '' };
+  pad = { uid: S.uid, id, r, i: Math.min(i, nLen() - 1), buf: '' };
   renderPad();
 }
+// Le pavé reste ouvert pendant qu'on tape des arrivées dans une autre série : chaque touche du pavé revient d'abord à sa série.
+function padSerie() { const s = pad && LIVE.find(x => x.uid === pad.uid); if (!s) { closePad(); return false; } S = s; return true; }
 function closePad() { pad = null; const box = $('#padbox'); if (box) box.innerHTML = ''; }
 function padCommit() {
-  if (!pad || pad.buf === '') return;
+  if (!pad || pad.buf === '' || !padSerie()) return;
   const a = Array.from({ length: nLen() }, (_, k) => (cbOf(pad.id, pad.r) || [])[k] ?? null);
   a[pad.i] = Number(pad.buf); pad.buf = '';
   setCb(pad.id, pad.r, a);
@@ -940,7 +1258,7 @@ function padCommit() {
   renderPad();
 }
 function padKey(k) {
-  if (!pad) return;
+  if (!pad || !padSerie()) return;
   if (k === 'ok') { if (pad.buf === '') { pad.i < nLen() - 1 ? (pad.i++, renderPad()) : closePad(); } else padCommit(); return; }
   if (k === 'del') {
     if (pad.buf) pad.buf = pad.buf.slice(0, -1);
@@ -951,28 +1269,37 @@ function padKey(k) {
   if (pad.buf.length >= 2) padCommit(); else renderPad(); // 2 chiffres = longueur suivante
 }
 function renderPad() {
-  const box = $('#padbox'); if (!box || !pad) return;
+  const box = $('#padbox'); if (!box || !pad || !padSerie()) return;
   const a = cbOf(pad.id, pad.r) || [];
   box.innerHTML = `<div class="pad">
-    <div class="pad-head"><b>${esc(S.names[pad.id])}</b><span>rép. ${pad.r + 1} · coups de bras par ${S.cfg.bassin || 25} m</span><button class="btn" id="pad-x">Fermer</button></div>
+    <div class="pad-head"><b>${esc(S.names[pad.id])}</b><span>${LIVE.length > 1 ? esc(nomSerie(S)) + ' · ' : ''}rép. ${pad.r + 1} · coups de bras par ${S.cfg.bassin || 25} m</span><button class="btn" id="pad-x">Fermer</button></div>
     <div class="pad-lens">${Array.from({ length: nLen() }, (_, k) => `<button class="pad-len ${k === pad.i ? 'on' : ''}" data-k="${k}"><small>L${k + 1}</small><b class="num">${k === pad.i && pad.buf ? pad.buf : (a[k] ?? '–')}</b></button>`).join('')}</div>
     <div class="pad-keys">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'del', 'ok'].map(k => `<button class="pad-key ${k === 'ok' ? 'go' : ''}" data-key="${k}">${k === 'del' ? '⌫' : k === 'ok' ? 'OK' : k}</button>`).join('')}</div>
   </div>`;
   $('#pad-x').onclick = closePad;
-  box.querySelectorAll('.pad-len').forEach(b => b.onclick = () => { pad.buf = ''; pad.i = +b.dataset.k; renderPad(); });
+  box.querySelectorAll('.pad-len').forEach(b => b.onclick = () => { if (!pad) return; pad.buf = ''; pad.i = +b.dataset.k; renderPad(); });
   box.querySelectorAll('.pad-key').forEach(b => b.onclick = () => padKey(b.dataset.key));
 }
 
-function isBout() { return (S.cfg.view || '').startsWith('bout'); }
-
-function buildGrid() {
-  const box = $('#lanes'); if (!box) return;
-  tileEls = {};
+// Dessine les lignes d'eau d'une série (only), ou de toutes les séries dépliées.
+function buildGrid(only) {
   presses.forEach(p => clearTimeout(p.timer)); presses.clear();
+  if (!only) tileEls = {};
+  LIVE.forEach(s => {
+    if (only && s !== only) return;
+    const box = $('#lanes-' + s.uid); if (!box) return;
+    Object.keys(tileEls).forEach(k => { if (k.startsWith(s.uid + '|')) delete tileEls[k]; });
+    withS(s, () => fillLanes(box));
+  });
+  tick();
+}
+function fillLanes(box) {
   box.innerHTML = '';
   // La grille reproduit le bassin tel que le chronométreur le voit depuis sa place.
-  const bout = isBout(), order = display.map((_, l) => l);
-  if (S.cfg.view === 'cote-bas' || S.cfg.view === 'bout-droite') order.reverse();
+  const display = rt().display, bout = isBout(), order = display.map((_, l) => l);
+  if (vue() === 'cote-bas' || vue() === 'bout-droite') order.reverse();
+  box.className = 'lanes' + (Math.max(0, ...display.map(d => d.length)) > 4 ? ' dense' : '');
+  box.style.cssText = `${bout ? 'grid-template-columns' : 'grid-template-rows'}: repeat(${Math.max(1, display.length)}, minmax(0, 1fr))`;
   order.forEach(l => {
     const ids = display[l];
     const lane = document.createElement('div'); lane.className = 'lane' + (bout ? ' bout' : '');
@@ -981,23 +1308,25 @@ function buildGrid() {
     ids.forEach(id => {
       const el = document.createElement('div'); el.className = 'tile';
       el.innerHTML = `<div class="name">${esc(S.names[id])}</div><div class="time num"></div><div class="cd num" hidden></div><div class="meta num"></div><div class="sqs"><div class="sq nage" data-sq="nage"></div><div class="sq cbq off" data-sq="cb">CB</div></div>`;
-      bindPress(el, id); tiles.appendChild(el); tileEls[id] = el;
+      bindPress(el, id); tiles.appendChild(el); tileEls[S.uid + '|' + id] = el;
     });
     box.appendChild(lane);
   });
-  tick();
 }
 
 function bindPress(el, id) {
+  const s = S; // la série de cette tuile
   el.addEventListener('pointerdown', e => {
     e.preventDefault();
     const t = Date.now(); // l'instant du toucher fait foi, pas celui du relâcher
+    if (!LIVE.includes(s)) return;
+    S = s;
     try { el.setPointerCapture(e.pointerId); } catch (err) {} // le relâcher revient à cette tuile, même si le doigt glisse
     // Petit carré (nage / CB) : actif seulement si le nageur ne nage pas ; sinon c'est un tap chrono comme le reste de la tuile.
     const sq = e.target && e.target.closest ? e.target.closest('.sq') : null;
     if (sq && !nageEnCours(id, t)) { presses.set(e.pointerId, { id, t, x: e.clientX, y: e.clientY, long: false, timer: null, sq: sq.dataset.sq }); return; }
     el.classList.add('pressing');
-    const p = { id, t, x: e.clientX, y: e.clientY, long: false, timer: setTimeout(() => { p.long = true; el.classList.remove('pressing'); openMenu(id); }, LONG_PRESS_MS) };
+    const p = { id, t, x: e.clientX, y: e.clientY, long: false, timer: setTimeout(() => { p.long = true; el.classList.remove('pressing'); if (LIVE.includes(s)) { S = s; openMenu(id); } }, LONG_PRESS_MS) };
     presses.set(e.pointerId, p);
   });
   el.addEventListener('pointermove', e => {
@@ -1008,6 +1337,8 @@ function bindPress(el, id) {
   const end = (e, commit) => {
     const p = presses.get(e.pointerId); if (!p) return;
     presses.delete(e.pointerId); clearTimeout(p.timer); el.classList.remove('pressing');
+    if (!LIVE.includes(s)) return;
+    S = s;
     if (p.sq) { if (commit) tapCarre(p.id, p.sq); return; }
     if (!p.long && (commit || Date.now() - p.t < LONG_PRESS_MS)) tap(p.id, p.t);
   };
@@ -1018,45 +1349,53 @@ function bindPress(el, id) {
 }
 
 function tick() {
-  if (view !== 'chrono' || !S) return;
-  const now = Date.now();
-  const clock = $('#clock'), rep = $('#rep');
+  if (view !== 'chrono') return;
+  const now = Date.now(), prev = S;
+  for (const s of LIVE.slice()) { S = s; if (tickSerie(now)) break; } // true : l'écran vient d'être redessiné (départ automatique)
+  S = prev;
+}
+function tickSerie(now) {
+  const r = rt(), head = $('#bh-' + S.uid);
   // Départ programmé sur la trotteuse : décompte, bips 3-2-1, départ automatique pile au top
   if (S.T0 == null) {
-    const info = $('#trot-info');
-    if (departPrevu) {
-      const reste = Math.ceil((departPrevu - now) / 1000);
-      if (reste <= 3 && reste >= 1 && dernierBip !== reste) { dernierBip = reste; bip(800, 0.12); }
-      if (now >= departPrevu) { const t0 = departPrevu; departPrevu = null; dernierBip = null; lancerDepart(t0); return; }
-      if (info) info.textContent = `Départ au ${departMarque} dans ${reste}"`;
-    } else if (info) {
-      const ph = phaseTrotteuse();
-      info.textContent = ph == null ? 'Départ au top de la trotteuse : cale-la d\'abord' : `Aiguille sur ${aiguille(now)}`;
+    if (r.departPrevu) {
+      const reste = Math.ceil((r.departPrevu - now) / 1000);
+      if (reste <= 3 && reste >= 1 && r.bip !== reste) { r.bip = reste; bip(800, 0.12); }
+      if (now >= r.departPrevu) { lancerDepart(r.departPrevu); return true; }
     }
-    const s60 = $('#t60s'), s30 = $('#t30s');
-    if (s60) s60.textContent = `${Math.ceil((prochainTop(60) - now) / 1000)}"`;
-    if (s30) s30.textContent = `${Math.ceil((prochainTop(30) - now) / 1000)}"`;
+    if (head) {
+      const info = head.querySelector('.b-info'), s60 = head.querySelector('.b-t60'), s30 = head.querySelector('.b-t30');
+      if (info) info.textContent = r.departPrevu ? `Départ au ${r.marque} dans ${Math.ceil((r.departPrevu - now) / 1000)}"` : phaseTrotteuse() == null ? '' : `Aiguille sur ${aiguille(now)}`;
+      if (s60) s60.textContent = `${Math.ceil((prochainTop(60) - now) / 1000)}"`;
+      if (s30) s30.textContent = `${Math.ceil((prochainTop(30) - now) / 1000)}"`;
+    }
+  } else if (head) {
+    const finished = allDone(), clock = head.querySelector('.b-clock'), rep = head.querySelector('.b-rep');
+    if (clock) clock.textContent = finished ? 'Fini' : fmtClock(now - S.T0);
+    if (rep) {
+      const txt = finished ? (cbPending() ? 'Coups de bras à noter, ou « Ranger »' : 'La série se range')
+        : S.pause ? `⏸ Pause depuis ${fmtClock(now - S.pause.at)} · départs figés` : `Rép. ${leadRep()} / ${nb()}`;
+      if (rep.textContent !== txt) rep.textContent = txt;
+    }
+    const pb = head.querySelector('[data-a="pause"]'), rg = head.querySelector('[data-a="ranger"]');
+    if (pb) {
+      const lab = S.pause ? '▶ Reprendre' : '⏸ Pause';
+      if (pb.textContent !== lab) { pb.textContent = lab; pb.classList.toggle('go', !!S.pause); }
+      pb.hidden = finished;
+    }
+    if (rg) rg.hidden = !finished;
   }
-  const finished = S.T0 != null && allDone();
-  if (clock) clock.textContent = S.T0 == null ? '00:00' : finished ? 'Fini' : fmtClock(now - S.T0);
-  if (rep) rep.innerHTML = S.T0 == null ? `${S.cfg.nbRep} × ${S.cfg.distance} · départ ${fmtCycle(S.cfg.cycle)} · vagues ${S.cfg.vague}"`
-    : finished ? `Coups de bras à noter, puis la série se range`
-    : S.pause ? `⏸ <b>Pause</b> depuis ${fmtClock(now - S.pause.at)} · départs figés` : `Rép. <b>${leadRep()}</b> / ${nb()}`;
-  const pb = $('#pause');
-  if (pb) {
-    const lab = S.pause ? '▶ Reprendre' : '⏸ Pause';
-    if (pb.textContent !== lab) { pb.textContent = lab; pb.classList.toggle('go', !!S.pause); }
-    pb.hidden = finished;
-  }
-  for (const id in tileEls) {
-    const el = tileEls[id], p = pending(id), r = S.res[id];
+  for (const id of S.lanes.flat()) {
+    const el = tileOf(id); if (!el) continue;
+    const p = pending(id), r = S.res[id];
     const last = r.slice().reverse().find(x => x && x.st === 'ok');
     const autoMiss = r.some(x => x && x.auto);
     // Une forme par information (retour terrain du 10/11) : dans l'eau = tuile blanche et temps qui défile ;
     // au mur = tuile foncée, temps nagé en gros ; décompte = pastille « ⏱ 12" » toujours au même endroit ; 3 dernières s = rouge.
     let cls = 'tile', time = '', meta = '', cd = '';
-    if (p < 0) { cls += ' done'; time = last ? fmt(last.t) : 'Fini'; meta = 'série finie'; }
-    else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][0]}ᵉ départ`; meta = `rép. 1 / ${nb()}`; }
+    const cible = cibleDe(id), ecart = x => (cible && x ? `cible ${fmtEcart(x.t - cible)} · ` : '');
+    if (p < 0) { cls += ' done'; time = last ? fmt(last.t) : 'Fini'; meta = ecart(last) + 'série finie'; }
+    else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][0]}ᵉ départ`; meta = (cible ? `cible ${fmt(cible, 1)} · ` : '') + `rép. 1 / ${nb()}`; }
     else {
       const d = dep(id, p);
       meta = `rép. ${p + 1} / ${nb()}`;
@@ -1066,7 +1405,8 @@ function tick() {
         if (!fige && d - now <= 3000) time = `${reste}"`; // le lancer : chiffre seul, énorme, sur fond rouge
         else {
           cd = `${fige ? '⏸' : '⏱'} ${reste}"`;
-          if (prev && prev.st === 'ok') { cls += ' rest'; time = fmt(prev.t); meta = `au mur · rép. ${p + 1} / ${nb()}`; }
+          // Au mur : le temps nagé en gros, et dessous l'écart à sa cible (plus besoin de calculer de tête)
+          if (prev && prev.st === 'ok') { cls += ' rest'; time = fmt(prev.t); meta = (cible ? ecart(prev) : 'au mur · ') + `rép. ${p + 1} / ${nb()}`; }
           else time = p === 0 ? 'au départ' : 'au mur';
         }
       }
@@ -1095,12 +1435,14 @@ function tick() {
     if (autoMiss && !b) { b = document.createElement('div'); b.className = 'badge'; b.textContent = 'manqué'; el.appendChild(b); }
     if (!autoMiss && b) b.remove();
   }
+  return false;
 }
 setInterval(tick, 100);
 
 // ---------- Menu appui long ----------
-function closeLayer() { $('#layer').innerHTML = ''; }
+function closeLayer() { $('#layer').innerHTML = ''; layerUid = null; }
 function openMenu(id) {
+  layerUid = S.uid;
   const p = pending(id), l = laneOf(id);
   const lastOk = S.res[id].reduce((acc, x, i) => (x && x.st === 'ok' ? i : acc), -1);
   const orderHtml = () => S.laneOrder[l].map((sid, i) => `<span class="chip ${sid === id ? 'me' : ''}">${i + 1}. ${esc(S.names[sid])}</span>`).join('');
@@ -1153,6 +1495,7 @@ function openMenu(id) {
 }
 
 function openFix(id, r) {
+  layerUid = S.uid;
   const cur = S.res[id][r];
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Corriger un temps">
@@ -1194,6 +1537,7 @@ function rpeOf(id) { return S.rpe && S.rpe[id] != null ? S.rpe[id] : null; }
 function rpeMissing() { return S.lanes.flat().filter(id => rpeOf(id) == null).length; }
 // seq = enchaînement : après chaque choix, on passe au nageur suivant (ordre des lignes), comme quand tu fais le tour du bassin.
 function openRpe(id, seq) {
+  layerUid = S.uid;
   const ids = S.lanes.flat(), i = ids.indexOf(id), cur = rpeOf(id);
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="RPE de ${esc(S.names[id])}">
@@ -1231,7 +1575,7 @@ function renderRecap() {
   const rows = S.lanes.map((ids, l) => ids.map(id => {
     const ok = S.res[id].filter(x => x && x.st === 'ok').map(x => x.t);
     const avg = ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : null;
-    return `<tr><td><b>${esc(S.names[id])}</b> · L${laneLabel(l)} · ${[...new Set(reps.map(r => lettreNage(nageDe(id, r))))].join('→')}</td>${reps.map(r => {
+    return `<tr><td><b>${esc(S.names[id])}</b> · L${laneLabel(l)} · ${[...new Set(reps.map(r => lettreNage(nageDe(id, r))))].join('→')}${cibleDe(id) ? `<div class="cbline num">cible ${fmt(cibleDe(id))}</div>` : ''}</td>${reps.map(r => {
       const x = S.res[id][r], a = cbOf(id, r);
       const missing = isCounted(r) && x && x.st === 'ok' && !cbComplete(id, r);
       const cb = a ? `<div class="cbline num">${cbText(a)}</div>` : missing ? `<div class="cbline">CB à noter</div>` : '';
@@ -1245,8 +1589,8 @@ function renderRecap() {
   }).join('')).join('');
   $('#app').innerHTML = `
   <div class="view"><div class="scroll"><div class="panel" style="max-width:none">
-    <div class="bar"><h1>${S.done ? 'Série terminée' : 'Récap en cours'} · ${S.cfg.nbRep} × ${S.cfg.distance}</h1><div class="spacer"></div>
-      ${S.done ? `<button class="btn go" id="home">Accueil</button>` : `<button class="btn go" id="back">Retour au chrono</button>`}</div>
+    <div class="bar"><h1>${S.done ? 'Série terminée' : 'Récap en cours'} · ${esc(nomSerie(S))} · ${S.cfg.nbRep} × ${S.cfg.distance}</h1><div class="spacer"></div>
+      ${S.done ? `${LIVE.length ? '<button class="btn go" id="bassin">Retour au bassin</button>' : ''}<button class="btn ${LIVE.length ? '' : 'go'}" id="home">Accueil</button>` : `<button class="btn go" id="back">Retour au bassin</button>`}</div>
     ${S.done ? `<p class="note">${fmtDate(S.endedAt)} · départ ${fmtCycle(S.cfg.cycle)} · vagues ${S.cfg.vague}". Rangée dans l'historique.</p>` : ''}
     ${(S.absents || []).length ? `<p class="note">Absents (non envoyés au Sheet) : ${S.absents.map(id => esc(S.names[id])).join(', ')}</p>` : ''}
     <p class="note">Touche une case pour corriger un temps. « manqué » : case vide, aucun temps inventé.</p>
@@ -1254,7 +1598,9 @@ function renderRecap() {
       <thead><tr><th>Nageur</th>${reps.map(r => `<th>Rép. ${r + 1}${isCounted(r) ? ' · CB' : ''}</th>`).join('')}<th>Moy. · CB</th><th>RPE</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     <div class="actions"><button class="btn go big" id="rpe-all">Noter les RPE${rpeMissing() ? ` (${rpeMissing()} à noter)` : ''}</button>
-      ${S.done && !S.cfg.essai ? `<button class="btn big" id="send-one">${S.sentAt ? 'Renvoyer au Sheet' : 'Envoyer au Sheet'}</button>` : ''}</div>
+      ${S.done && !S.cfg.essai ? `<button class="btn big" id="send-one">${S.sentAt ? 'Renvoyer au Sheet' : 'Envoyer au Sheet'}</button>` : ''}
+      ${S.done ? `<button class="btn big" id="again">Relancer${S.cfg.essai ? '' : ` · passage ${passagesFaits(S.cfg.idSerie) + 1}`}</button>` : ''}</div>
+    ${S.done ? `<p class="note">« Relancer » rouvre la même série au bassin (mêmes nageurs, mêmes lignes, réglages gardés) pour un nouveau passage. Ce récap n'est pas modifié.</p>` : ''}
     ${S.done ? `<p class="note">${S.cfg.essai ? "Série d'essai : elle reste sur cet appareil." : S.sentAt ? `Envoyée au Sheet le ${fmtDate(S.sentAt)}.` : 'Pas encore envoyée au Sheet. Elle reste en attente sur cet appareil.'}</p>` : ''}
     <div class="actions">${S.done ? `<button class="btn danger" id="del">Supprimer de l'historique</button>` : `<button class="btn danger" id="end2">Terminer la série</button>`}</div>
   </div></div></div>`;
@@ -1268,10 +1614,11 @@ function renderRecap() {
   $('#rpe-all').onclick = () => { const ids = S.lanes.flat(); openRpe(ids.find(id => rpeOf(id) == null) || ids[0], true); };
   if (S.done) {
     $('#home').onclick = () => { S = null; view = 'setup'; render(); autoEnvoi(); };
+    if ($('#bassin')) $('#bassin').onclick = () => { S = null; view = 'chrono'; render(); autoEnvoi(); };
+    $('#again').onclick = () => { const s = relancer(S); view = 'chrono'; render(); toast(`${idCourt(s)} rouverte au bassin · prête à partir`); };
     armed($('#del'), 'Confirmer : supprimer', () => {
-      HIST = HIST.filter(h => h.uid !== S.uid);
-      try { localStorage.setItem(KEY_HIST, JSON.stringify(HIST)); } catch (e) {}
-      S = null; view = 'setup'; render(); toast('Série supprimée');
+      HIST = HIST.filter(h => h.uid !== S.uid); saveHist();
+      S = null; view = LIVE.length ? 'chrono' : 'setup'; render(); toast('Série supprimée');
     });
   } else {
     $('#back').onclick = () => { view = 'chrono'; render(); };
@@ -1280,15 +1627,20 @@ function renderRecap() {
 }
 
 function render() {
-  if (view === 'setup' || !S) renderSetup();
+  if (view === 'recap' && !S) view = LIVE.length ? 'chrono' : 'setup';
+  if (view === 'chrono' && !LIVE.length && !recentes().length) view = 'setup';
+  if (view === 'setup') renderSetup();
   else if (view === 'chrono') renderChrono();
   else renderRecap();
 }
 
-// Reprise après fermeture de l'app ou batterie vide
+// Reprise après fermeture de l'app ou batterie vide : toutes les séries ouvertes reviennent, parties ou non.
 HIST = loadHist();
-S = load();
-if (S && S.T0 != null) { syncDisplay(); view = 'chrono'; } else S = null;
+LIVE = loadLive();
+if (purgeHist(false)) saveHist();
+// Demande au système de ne pas effacer les données de l'app quand l'appareil manque de place.
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
+if (LIVE.some(started)) { view = 'chrono'; keepAwake(); }
 render();
 autoEnvoi();
 </script>
