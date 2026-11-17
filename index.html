@@ -251,6 +251,14 @@ input, select, textarea { font-size: 16px !important; }
 .appel-nages button.prevu { border-style: dashed; border-color: var(--nage); }
 .appel-nages button.on { background: var(--nage); color: var(--nage-ink); border: 2px solid var(--nage); }
 .a-valider { border-left: 6px solid var(--hot); }
+/* Alerte de chevauchement (avant le départ) et écran « Couper en deux » */
+.alerte { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--hot); color: var(--hot-ink); border-radius: 10px; padding: 6px 10px; font-weight: 600; }
+.alerte span { flex: 1 1 320px; }
+.alerte .btn { border-color: var(--hot-ink); }
+.couper-ligne { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.couper-ligne .lane-tag { width: 34px; min-height: 46px; }
+.couper-ligne .chip { min-height: 46px; }
+.chip.g2 { background: var(--nage); color: var(--nage-ink); border-color: var(--nage); }
 .tablewrap { overflow-x: auto; }
 table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: right; white-space: nowrap; }
@@ -276,7 +284,7 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v12';
+const APP_VERSION = 'v13';
 const KEY = 'chrono-maquette-v1';            // v10 : une seule série en cours. Reprise au premier lancement de la v11, puis vidée.
 const KEY_LIVE = 'chrono-live-v2';           // toutes les séries ouvertes (prêtes ou en cours)
 const KEY_HIST = 'chrono-maquette-historique-v1';
@@ -306,7 +314,7 @@ function started(s) { return s.T0 != null; }
 function tileOf(id) { return tileEls[S.uid + '|' + id]; }
 // Nom court d'une série : « C4-20261112-ANC-G1-P1 » → « ANC-G1-P1 » ; « · p2 » à partir du 2e passage.
 function idCourt(s) { return s.cfg.essai ? 'Essai' : String(s.cfg.idSerie || '').replace(/^.*?-\d{8}-/, '') || String(s.cfg.groupe || 'Série'); }
-function nomSerie(s) { return idCourt(s) + (s.passage > 1 ? ` · p${s.passage}` : ''); }
+function nomSerie(s) { return idCourt(s) + (s.groupeNo ? ` · gr.${s.groupeNo}` : '') + (s.passage > 1 ? ` · p${s.passage}` : ''); }
 function detailSerie(s) {
   const n = [...new Set(Object.values(s.cfg.nages || {}).filter(Boolean))];
   return `${s.cfg.nbRep} × ${s.cfg.distance}${n.length > 1 ? ' spé' : n[0] ? ' ' + n[0] : s.cfg.nage ? ' ' + s.cfg.nage : ''}`;
@@ -449,6 +457,9 @@ function passagesFaits(idSerie) {
 }
 function numeroterPassage() {
   if (S.passage || S.cfg.essai || !S.cfg.idSerie) return;
+  // Série coupée en groupes (v13) : les groupes d'un même passage gardent le même numéro (même id_serie dans le Sheet, nageurs différents).
+  const frere = S.lot && [...LIVE, ...HIST].find(x => x !== S && x.lot === S.lot && x.passage);
+  if (frere) { S.passage = frere.passage; return; }
   S.passage = passagesFaits(S.cfg.idSerie) + 1;
   try { const m = JSON.parse(getLS(KEY_RUNS)) || {}; m[S.cfg.idSerie] = S.passage; setLS(KEY_RUNS, JSON.stringify(m)); } catch (e) {}
 }
@@ -463,7 +474,135 @@ function relancer(h) {
   if ((h.absents || []).length) { S.absents = [...h.absents]; save(); }
   // L'appel suit la série d'un passage à l'autre : ce qui a changé depuis le passage précédent s'applique au nouveau.
   if (h.prevu) { S.prevu = JSON.parse(JSON.stringify(h.prevu)); S.appelFait = JSON.parse(JSON.stringify(h.appelFait || { absents: [], nages: {} })); appliquerAppel(S); save(); }
+  // Groupe d'une série coupée : les groupes relancés d'un même passage repartent ensemble sous le même numéro.
+  if (h.lot) { S.lot = h.lot + '>' + (h.passage || 1); S.groupeNo = h.groupeNo; save(); }
   return S;
+}
+
+// ---------- Chevauchement des répétitions (v13) ----------
+// Test du 17/11 : 4×25 départ 35", 9 nageurs sur 2 lignes, vagues de 10". La tête de ligne repartait pendant que
+// le dernier finissait son 1er 25 : deux répétitions dans l'eau en même temps, impossible de savoir à qui donner le tap.
+// Avant le départ, l'app estime l'arrivée du dernier de chaque ligne (place × vague + son temps) et la compare au départ suivant.
+const MARGE_MUR = 5; // secondes visées entre l'arrivée du dernier et le nouveau départ de la tête, par les corrections proposées
+// Temps estimé d'un nageur : sa cible ; sans cible (nageur ajouté), la cible la plus lente de la série ; sinon 0,8 s par mètre.
+function estNage(id) {
+  const c = S.cfg.cibles || {}, connues = S.laneOrder.flat().map(x => +c[x]).filter(v => v > 0);
+  return +c[id] > 0 ? +c[id] : connues.length ? Math.max(...connues) : S.cfg.distance * 0.8;
+}
+// Le pire cas : { l, id, k (place dans la ligne, 0 = tête), arr (arrivée estimée après le départ de la tête), estime } ; null si ça passe.
+function chevauchement() {
+  let pire = null;
+  S.laneOrder.forEach((ids, l) => ids.forEach((id, k) => {
+    const arr = k * S.cfg.vague + estNage(id);
+    if (!pire || arr > pire.arr) pire = { l, id, k, arr, estime: !(+(S.cfg.cibles || {})[id] > 0) };
+  }));
+  return pire && pire.arr > S.cfg.cycle ? pire : null;
+}
+// Départ qui laisse MARGE_MUR au dernier, arrondi aux 5 s.
+function departConseille(pire) { return Math.ceil((pire.arr + MARGE_MUR) / 5) * 5; }
+// Plus grande vague (multiple de 5, au moins 5") qui fait tenir toutes les lignes dans le départ actuel ; null si aucune.
+function vagueConseillee() {
+  let v = Infinity;
+  for (const ids of S.laneOrder) for (let k = 0; k < ids.length; k++) {
+    const libre = S.cfg.cycle - MARGE_MUR - estNage(ids[k]);
+    if (k === 0) { if (libre < 0) return null; } else v = Math.min(v, libre / k);
+  }
+  v = Math.floor(v / 5) * 5;
+  return isFinite(v) && v >= 5 && v < S.cfg.vague ? v : null;
+}
+function alerteHtml(s) {
+  return withS(s, () => {
+    const p = chevauchement(); if (!p) return '';
+    const v = vagueConseillee(), d = departConseille(p);
+    return `<div class="alerte" role="alert"><span>⚠ Ça va se chevaucher : ligne ${laneLabel(p.l)}, ${esc(S.names[p.id])} (${p.k + 1}<sup>e</sup>) arrive vers ${Math.round(p.arr)}"${p.estime ? ' (estimé, sans cible)' : ''}, la tête repart à ${fmtCycle(S.cfg.cycle)}.</span>
+      <button class="btn" data-a="fixdep">Départ ${fmtCycle(d)}</button>${v ? `<button class="btn" data-a="fixvag">Vague ${v}"</button>` : ''}<button class="btn go" data-a="couper">✂ Couper en deux</button></div>`;
+  });
+}
+function corrigerDepart() {
+  const p = chevauchement(); if (!p) return;
+  pushUndo(`départ de ${nomSerie(S)}`); S.cfg.cycle = departConseille(p); save(); renderChrono();
+  toast(`${nomSerie(S)} : départ ${fmtCycle(S.cfg.cycle)}`);
+}
+function corrigerVague() {
+  const v = vagueConseillee(); if (!v) return;
+  pushUndo(`vague de ${nomSerie(S)}`); S.cfg.vague = v; save(); renderChrono();
+  toast(`${nomSerie(S)} : vagues de ${v}"`);
+}
+
+// ---------- Couper une série en deux groupes (v13, avant le départ) ----------
+// Chaque groupe devient une série à part, avec son départ et sa vague, menée de front avec l'autre.
+// Dans le Sheet, les deux gardent le même id_serie et le même passage (les nageurs sont différents, rien ne s'écrase).
+function couper(ids2) {
+  const s1 = S, set2 = new Set(ids2);
+  if (started(s1) || !ids2.length || ids2.length >= s1.laneOrder.flat().length) return null;
+  const nums = s1.laneOrder.map((_, l) => laneLabel(l));
+  const lanes2 = s1.laneOrder.map(ids => ids.filter(id => set2.has(id)));
+  const idx2 = lanes2.map((x, l) => (x.length ? l : -1)).filter(l => l >= 0);
+  // Groupe 1 : ce qui reste ; une ligne vidée disparaît de la série
+  ['lanes', 'laneOrder', 'queue'].forEach(k => { s1[k] = s1[k].map(ids => ids.filter(id => !set2.has(id))); });
+  const idx1 = s1.laneOrder.map((x, l) => (x.length ? l : -1)).filter(l => l >= 0);
+  ['lanes', 'laneOrder', 'queue'].forEach(k => { s1[k] = idx1.map(l => s1[k][l]); });
+  ids2.forEach(id => { delete s1.order[id]; delete s1.res[id]; });
+  s1.laneOrder.forEach(ids => ids.forEach((id, k) => s1.order[id].fill(k + 1)));
+  s1.cfg.laneNums = idx1.map(l => nums[l]); s1.cfg.lanes = idx1.length; s1.cfg.perLane = Math.max(1, ...s1.laneOrder.map(x => x.length));
+  // Groupe 2 : mêmes réglages, ses nageurs dans leurs lignes, dans le même ordre
+  const cfg2 = JSON.parse(JSON.stringify(s1.cfg));
+  cfg2.laneNums = idx2.map(l => nums[l]); cfg2.lanes = idx2.length; cfg2.perLane = Math.max(1, ...idx2.map(l => lanes2[l].length));
+  const lot = s1.lot || 'lot' + s1.uid, no = Math.max(1, ...LIVE.filter(x => x.lot === lot).map(x => x.groupeNo || 1));
+  s1.lot = lot; s1.groupeNo = s1.groupeNo || 1;
+  const remap = (places, garder, idx) => Object.fromEntries(Object.entries(places).filter(([id]) => garder(id)).map(([id, [l, i]]) => [id, [Math.max(0, idx.indexOf(l)), i]]));
+  const prevu = s1.prevu;
+  if (prevu) prevu.places = remap(prevu.places, id => !set2.has(id), idx1);
+  undoStack = undoStack.filter(e => e.uid !== s1.uid);
+  withS(s1, syncDisplay);
+  const s2 = buildSeries(cfg2, idx2.map(l => lanes2[l]), Object.assign({}, s1.names), JSON.parse(JSON.stringify(s1.info)));
+  s2.lot = lot; s2.groupeNo = no + 1;
+  if (s1.nagesRep) s2.nagesRep = Object.fromEntries(ids2.filter(id => s1.nagesRep[id]).map(id => [id, s1.nagesRep[id]]));
+  if (prevu) { // le groupe 2 repart de sa propre grille ; ce que l'appel avait déjà appliqué le suit
+    s2.prevu = { places: Object.fromEntries(s2.lanes.flatMap((ids, l) => ids.map((id, i) => [id, [l, i]]))), nages: Object.assign({}, prevu.nages), cibles: Object.assign({}, prevu.cibles) };
+    s2.appelFait = JSON.parse(JSON.stringify(s1.appelFait || { absents: [], nages: {} }));
+    s2.appelFait.absents = s2.appelFait.absents.filter(id => set2.has(id));
+  }
+  // Le groupe 2 se place juste après le groupe 1 à l'écran
+  LIVE = LIVE.filter(x => x !== s2); LIVE.splice(LIVE.indexOf(s1) + 1, 0, s2);
+  rt(s1).open = true; rt(s2).open = true;
+  saveLive(); S = s2;
+  return s2;
+}
+function openCouper() {
+  layerUid = S.uid;
+  const s = S, moitie = () => s.laneOrder.flatMap(ids => ids.slice(Math.ceil(ids.length / 2)));
+  const parLigne = () => s.laneOrder.slice(Math.ceil(s.laneOrder.length / 2)).flat();
+  let sel = new Set(moitie());
+  const bilan = (ids, n) => {
+    if (!ids.length) return `Groupe ${n} : vide`;
+    const lo = s.laneOrder.map(l => l.filter(id => ids.includes(id))).filter(l => l.length);
+    const p = withS({ cfg: s.cfg, laneOrder: lo, lanes: lo, names: s.names }, chevauchement);
+    return `Groupe ${n} : ${ids.length} nageur${ids.length > 1 ? 's' : ''} · ` + (p ? `⚠ chevauche encore (tu pourras corriger départ ou vague sur sa bande)` : '✓ ça passe');
+  };
+  const draw = () => {
+    const tous = s.laneOrder.flat(), g2 = tous.filter(id => sel.has(id)), g1 = tous.filter(id => !sel.has(id));
+    $('#layer').innerHTML = `
+    <div class="overlay" id="ov"><div class="sheet" style="width:min(720px,100%)" role="dialog" aria-label="Couper la série en deux">
+      <h2>Couper en deux · ${esc(nomSerie(s))}</h2>
+      <p class="note">Touche un nageur pour le changer de groupe. Chaque groupe devient une série avec son propre Départ, menée en même temps que l'autre.</p>
+      <div class="row"><button class="btn" id="c-moitie">Moitié de chaque ligne</button>${s.laneOrder.length > 1 ? '<button class="btn" id="c-ligne">Une moitié des lignes</button>' : ''}</div>
+      ${s.laneOrder.map((ids, l) => `<div class="couper-ligne"><span class="lane-tag">${laneLabel(l)}</span>${ids.map(id => `<button class="chip ${sel.has(id) ? 'g2' : ''}" data-c="${esc(id)}">${esc(s.names[id])} · ${sel.has(id) ? '2' : '1'}</button>`).join('')}</div>`).join('')}
+      <p class="note"><b>${bilan(g1, 1)}</b><br><b>${bilan(g2, 2)}</b></p>
+      <button class="btn go big" id="c-ok" ${g1.length && g2.length ? '' : 'disabled'}>✂ Couper</button>
+      <button class="btn big" id="c-close">Fermer</button>
+    </div></div>`;
+    $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+    $('#c-close').onclick = closeLayer;
+    $('#c-moitie').onclick = () => { sel = new Set(moitie()); draw(); };
+    if ($('#c-ligne')) $('#c-ligne').onclick = () => { sel = new Set(parLigne()); draw(); };
+    $('#layer').querySelectorAll('[data-c]').forEach(b => b.onclick = () => { const id = b.dataset.c; sel.has(id) ? sel.delete(id) : sel.add(id); draw(); });
+    $('#c-ok').onclick = () => {
+      S = s; const s2 = couper(tous.filter(id => sel.has(id))); if (!s2) return;
+      closeLayer(); renderChrono(); toast(`Coupée : ${nomSerie(s)} et ${nomSerie(s2)}, chacune avec son Départ`, 3500);
+    };
+  };
+  draw();
 }
 
 // ---------- Appel de la séance (v12) : absents et spé du jour, notés une seule fois pour toute la séance ----------
@@ -1194,7 +1333,8 @@ function renderHead(s) {
       ${r.departPrevu ? '<button class="btn danger" data-a="tstop">Annuler le départ programmé</button>' : ''}
       <button class="btn" data-a="tcal">${cale ? '⟲ Recaler' : 'Caler la trotteuse'}</button>
       ${!s.cfg.essai && PLAN ? '<button class="btn" data-a="add">+ Nageur</button>' : ''}
-      <button class="btn" data-a="regler">⚙ Régler</button>`;
+      <button class="btn" data-a="regler">⚙ Régler</button>
+      ${alerteHtml(s)}`;
   } else {
     h.innerHTML = `<span class="b-nom"><b>${esc(nomSerie(s))}</b> ${detailSerie(s)}</span>${essai}
       <span class="b-clock num"></span><span class="b-rep num"></span><div class="spacer"></div>
@@ -1214,6 +1354,9 @@ function headAction(a) {
   else if (a === 'tcal') { calerTrotteuse(); bip(1200, 0.12); toast('Trotteuse calée : touche au passage du 60, c\'est fait'); renderChrono(); }
   else if (a === 'add') openAdd();
   else if (a === 'regler') openRegler();
+  else if (a === 'fixdep') corrigerDepart();
+  else if (a === 'fixvag') corrigerVague();
+  else if (a === 'couper') openCouper();
   else if (a === 'pause') (S.pause ? openReprise() : pauser());
   else if (a === 'ranger') finishSeries(true);
   else if (a === 'recap') { view = 'recap'; render(); }
@@ -1271,11 +1414,13 @@ function openRegler() {
     </div>
     <p class="note">Départ 1'40 s'écrit <b>1:40</b>. Changer la distance retire les temps cibles : ils valaient pour ${c.distance} m.</p>
     <button class="btn go big" id="g-ok">Enregistrer</button>
+    ${S.laneOrder.flat().length > 1 ? '<button class="btn" id="g-couper">✂ Couper en deux groupes</button>' : ''}
     <button class="btn danger" id="g-del">Retirer du bassin (elle ne sera pas nagée)</button>
     <button class="btn big" id="g-close">Fermer</button>
   </div></div>`;
   $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
   $('#g-close').onclick = closeLayer;
+  if ($('#g-couper')) $('#g-couper').onclick = openCouper;
   $('#g-ok').onclick = () => {
     const cycle = parseTime($('#g-cyc').value);
     if (!cycle) { toast('Départ illisible : écris par exemple 1:40'); return; }
