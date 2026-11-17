@@ -237,6 +237,20 @@ input, select, textarea { font-size: 16px !important; }
 .preview div { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .chip { border: 2px solid var(--line); background: var(--surface); border-radius: 8px; padding: 4px 10px; font-weight: 600; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+/* Appel de la séance : un nageur par carte, toucher le nom = présent / absent ; dessous, sa nage dans les séries spé */
+.appel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.appel-row { display: flex; flex-direction: column; gap: 6px; border: 2px solid var(--line); border-radius: 10px; background: var(--surface); padding: 6px; }
+.appel-row.abs { border-color: var(--warn); background: var(--done); }
+.appel-nom { flex: 1; min-width: 0; border: 0; background: none; text-align: left; min-height: 56px; display: flex; flex-direction: column; justify-content: center; padding: 4px 8px; }
+.appel-nom b { font-family: var(--font-display); font-size: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.appel-nom span { font-size: 13px; color: var(--muted); }
+.appel-row.abs .appel-nom b { text-decoration: line-through; color: var(--muted); }
+.appel-row.abs .appel-nom span { color: var(--warn); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.appel-nages { display: flex; gap: 4px; }
+.appel-nages button { flex: 1; min-width: 40px; min-height: 52px; border: 2px solid var(--line); border-radius: 8px; background: var(--surface); font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+.appel-nages button.prevu { border-style: dashed; border-color: var(--nage); }
+.appel-nages button.on { background: var(--nage); color: var(--nage-ink); border: 2px solid var(--nage); }
+.a-valider { border-left: 6px solid var(--hot); }
 .tablewrap { overflow-x: auto; }
 table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: right; white-space: nowrap; }
@@ -262,7 +276,7 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v11';
+const APP_VERSION = 'v12';
 const KEY = 'chrono-maquette-v1';            // v10 : une seule série en cours. Reprise au premier lancement de la v11, puis vidée.
 const KEY_LIVE = 'chrono-live-v2';           // toutes les séries ouvertes (prêtes ou en cours)
 const KEY_HIST = 'chrono-maquette-historique-v1';
@@ -447,7 +461,82 @@ function relancer(h) {
   c.perLane = Math.max(1, ...lanes.map(l => l.length));
   buildSeries(c, lanes, Object.assign({}, h.names), JSON.parse(JSON.stringify(h.info)));
   if ((h.absents || []).length) { S.absents = [...h.absents]; save(); }
+  // L'appel suit la série d'un passage à l'autre : ce qui a changé depuis le passage précédent s'applique au nouveau.
+  if (h.prevu) { S.prevu = JSON.parse(JSON.stringify(h.prevu)); S.appelFait = JSON.parse(JSON.stringify(h.appelFait || { absents: [], nages: {} })); appliquerAppel(S); save(); }
   return S;
+}
+
+// ---------- Appel de la séance (v12) : absents et spé du jour, notés une seule fois pour toute la séance ----------
+// Test du 12/11 : chaque absent, chaque nageur qui change de nage, était à corriger série par série.
+// L'appel s'applique à toutes les séries du Sheet pas encore parties (ouvertes au bassin ou ouvertes plus tard),
+// jamais à une série déjà partie (là, « Sort de l'eau » reste le geste). Il ne vaut que pour la journée.
+const KEY_APPEL = 'chrono-appel';
+function jourCle(t = Date.now()) { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function appel() {
+  let a = null; try { a = JSON.parse(getLS(KEY_APPEL)); } catch (e) {}
+  return a && a.jour === jourCle() ? a : { jour: jourCle(), absents: [], nages: {} };
+}
+function ecrireAppel(a) { a.jour = jourCle(); setLS(KEY_APPEL, JSON.stringify(a)); }
+// Série « spé » : chaque nageur y nage sa spécialité (nages différentes d'un nageur à l'autre dans le Sheet).
+// La spé du jour ne touche que ces séries : une série tout en crawl reste en crawl.
+function estSpe(s) { return new Set(Object.values((s.prevu && s.prevu.nages) || s.cfg.nages || {}).filter(Boolean)).size > 1; }
+// Ce que prévoyait le Sheet (places, nages, cibles) : pour remettre un nageur noté absent par erreur, ou revenir à sa nage.
+function noterPrevu(s) {
+  const places = {};
+  s.lanes.forEach((ids, l) => ids.forEach((id, i) => { places[id] = [l, i]; }));
+  s.prevu = { places, nages: Object.assign({}, s.cfg.nages || {}), cibles: Object.assign({}, s.cfg.cibles || {}) };
+  s.appelFait = { absents: [], nages: {} };
+}
+function oterDeLaGrille(id) {
+  const l = laneOf(id); if (l < 0) return;
+  [S.lanes, S.laneOrder, S.queue].forEach(t => { t[l] = t[l].filter(x => x !== id); });
+  S.laneOrder[l].forEach((sid, idx) => S.order[sid].fill(idx + 1));
+  S.absents = [...new Set([...(S.absents || []), id])];
+}
+// Remis à sa place prévue : devant le premier nageur prévu derrière lui dans sa ligne.
+function remettreEnGrille(id) {
+  const [l0, i0] = S.prevu.places[id], l = Math.min(l0, S.lanes.length - 1);
+  const apres = x => S.prevu.places[x] && S.prevu.places[x][0] === l0 && S.prevu.places[x][1] > i0;
+  [S.lanes, S.laneOrder, S.queue].forEach(t => { const k = t[l].findIndex(apres); t[l].splice(k < 0 ? t[l].length : k, 0, id); });
+  if (!S.order[id] || S.order[id].length !== nb()) { S.order[id] = Array(nb()).fill(1); S.res[id] = Array(nb()).fill(null); }
+  S.laneOrder[l].forEach((sid, idx) => S.order[sid].fill(idx + 1));
+  S.absents = (S.absents || []).filter(x => x !== id);
+}
+// N'applique que ce qui a changé dans l'appel depuis la dernière fois : un réglage fait à la main dans une série reste.
+function appliquerAppel(s) {
+  if (!s || !s.prevu || s.cfg.essai || s.done || started(s)) return false;
+  const a = appel(), fait = s.appelFait || (s.appelFait = { absents: [], nages: {} });
+  let change = false;
+  withS(s, () => {
+    Object.keys(s.prevu.places).forEach(id => {
+      const veut = a.absents.includes(id), avait = fait.absents.includes(id);
+      if (veut === avait) return;
+      if (veut) oterDeLaGrille(id);
+      else if (laneOf(id) < 0) remettreEnGrille(id);
+      fait.absents = veut ? [...fait.absents, id] : fait.absents.filter(x => x !== id);
+      change = true;
+    });
+    if (estSpe(s)) Object.keys(s.prevu.places).forEach(id => {
+      const veut = a.nages[id] || '', avait = fait.nages[id] || '';
+      if (veut === avait) return;
+      const n = veut || s.prevu.nages[id] || '';
+      s.cfg.nages = Object.assign(s.cfg.nages || {}, { [id]: n });
+      if (s.nagesRep) delete s.nagesRep[id];
+      // La cible venait de sa nage prévue : dans une autre nage, pas de cible plutôt qu'une fausse.
+      s.cfg.cibles = Object.assign(s.cfg.cibles || {}, { [id]: n === s.prevu.nages[id] ? (s.prevu.cibles[id] || null) : null });
+      if (veut) fait.nages[id] = veut; else delete fait.nages[id];
+      change = true;
+    });
+    if (change) syncDisplay();
+  });
+  // « Annuler » ne doit pas défaire l'appel à moitié : les gestes d'avant sur cette série ne s'annulent plus.
+  if (change) undoStack = undoStack.filter(e => e.uid !== s.uid);
+  return change;
+}
+function appliquerAppelPartout() {
+  const n = LIVE.filter(appliquerAppel).length;
+  if (n) saveLive();
+  return n;
 }
 
 // ---------- Lien avec le Google Sheet (Apps Script) ----------
@@ -506,11 +595,13 @@ function startPlanned(id) {
   });
   const nbRep = +f.nb_rep;
   const countReps = [...new Set(String(f.reps_comptage || '').split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= nbRep))].sort((a, b) => a - b);
-  return buildSeries({
+  const s = buildSeries({
     distance: +f.distance, nbRep, cycle: +f.cycle_s, vague: +f.vague_s, bassin: +f.bassin_m || 25, countReps,
     lanes: lanes.length, perLane: Math.max(...lanes.map(l => l.length)),
     nage: String(f.nage || ''), groupe: String(f.groupe || ''), idSerie: sp.id, cibles, nages, codes, code: String(f.type || ''), laneNums
   }, lanes, names, info);
+  noterPrevu(s); appliquerAppel(s); S = s; save();
+  return s;
 }
 
 // Une ligne par répétition et par nageur (format de l'onglet Resultats)
@@ -532,7 +623,18 @@ function lignesSheet(s) {
   })));
   S = prev; return rows;
 }
-function aEnvoyer() { return HIST.filter(h => !h.cfg.essai && !h.sentAt); }
+// v12 : rien ne part au Sheet sans « Valider » (test du 12/11 : pouvoir tout reprendre au calme, temps, CB, RPE, avant l'export).
+// Une série validée part dès qu'il y a du réseau ; corrigée ensuite, elle redevient « à valider ».
+function aValider() { return HIST.filter(h => !h.cfg.essai && !h.sentAt && !h.validee); }
+function aEnvoyer() { return HIST.filter(h => !h.cfg.essai && !h.sentAt && h.validee); }
+async function valider(liste) {
+  liste.forEach(h => { h.validee = Date.now(); }); saveHist();
+  if (navigator.onLine === false) return { n: liste.length, envoyees: 0, erreur: 'Pas de réseau : envoi dès le retour du wifi' };
+  try { return { n: liste.length, envoyees: await envoyer(aEnvoyer()) }; }
+  catch (e) { return { n: liste.length, envoyees: 0, erreur: e.message + ' · envoi au prochain réseau' }; }
+}
+function msgValide(r) { return `✓ ${r.n} série${r.n > 1 ? 's' : ''} validée${r.n > 1 ? 's' : ''}` + (r.erreur ? ` · ${r.erreur}` : r.envoyees ? ' et envoyée' + (r.envoyees > 1 ? 's' : '') + ' au Sheet' : ''); }
+function etatExport(h) { return h.cfg.essai ? 'essai' : h.sentAt ? 'envoyée ✓' : h.validee ? 'validée · envoi en attente' : 'à valider'; }
 async function envoyer(liste) {
   let n = 0;
   for (const s of liste) {
@@ -541,7 +643,7 @@ async function envoyer(liste) {
   }
   return n;
 }
-// Envoi automatique dès qu'il y a du réseau : fin de série, ouverture de l'app, retour du wifi, retour à l'accueil.
+// Envoi automatique des séries VALIDÉES dès qu'il y a du réseau : ouverture de l'app, retour du wifi, retour à l'accueil.
 let envoiEnCours = false;
 async function autoEnvoi() {
   if (envoiEnCours || !getLS(KEY_SECRET) || navigator.onLine === false || !aEnvoyer().length) return;
@@ -555,8 +657,8 @@ async function autoEnvoi() {
 window.addEventListener('online', autoEnvoi);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoEnvoi(); });
 
-// Une correction après envoi : la série repasse « à envoyer » (le renvoi remplace ses lignes dans le Sheet)
-function touched() { if (S && S.done && S.sentAt) S.sentAt = null; }
+// Une correction après validation ou envoi : la série repasse « à valider » (le renvoi remplacera ses lignes dans le Sheet)
+function touched() { if (S && S.done) { S.sentAt = null; S.validee = null; } }
 
 // ---------- Coups de bras : un chiffre par longueur, sur les répétitions comptées ----------
 // Hors de la pile Annuler : « Annuler » ne défait que les taps chrono.
@@ -755,9 +857,7 @@ function moveToLane(id, to) {
 function markAbsent(id) {
   const l = laneOf(id); if (S.T0 != null || l < 0) return;
   pushUndo();
-  [S.lanes, S.laneOrder, S.queue].forEach(t => { t[l] = t[l].filter(x => x !== id); });
-  S.laneOrder[l].forEach((sid, idx) => S.order[sid].fill(idx + 1));
-  S.absents = [...(S.absents || []), id];
+  oterDeLaGrille(id);
   syncDisplay(); save();
 }
 // Sort de l'eau (pendant la série) : ses répétitions restantes passent en « non faite ».
@@ -932,12 +1032,17 @@ function renderSetup() {
   c.view = vue();
   const cbDefault = c.countReps ? c.countReps.join(';') : [...new Set([1, Math.ceil(c.nbRep / 2), c.nbRep])].join(';');
   const VIEWS = [['cote-haut', 'Côté du bassin · ligne 1 en haut'], ['cote-bas', 'Côté du bassin · ligne 1 en bas'], ['bout-gauche', 'Bout du bassin · ligne 1 à gauche'], ['bout-droite', 'Bout du bassin · ligne 1 à droite']];
-  const secret = getLS(KEY_SECRET), sp = seriesPretes(), pend = aEnvoyer();
+  const secret = getLS(KEY_SECRET), sp = seriesPretes(), pend = aEnvoyer(), aval = aValider();
   $('#app').innerHTML = `
   <div class="view"><div class="scroll"><div class="panel">
     <h1>Chrono multi-nageurs</h1>
     ${LIVE.length ? `<div class="actions"><button class="btn go big" id="resume">Au bassin · ${LIVE.length} série${LIVE.length > 1 ? 's' : ''} ouverte${LIVE.length > 1 ? 's' : ''}${enCours ? ` · ${enCours} en cours` : ''}</button></div>
       <p class="note">${LIVE.map(s => esc(nomSerie(s)) + (started(s) ? ' (en cours)' : ' (prête)')).join(' · ')}. Elles restent sur l'appareil tant que tu ne les as pas terminées ou retirées.</p>` : ''}
+    ${secret && PLAN ? (() => {
+      const a = appel(), nn = Object.keys(a.nages).length;
+      return `<div class="actions"><button class="btn big" id="appel">📋 Appel de la séance${a.absents.length ? ` · ${a.absents.length} absent${a.absents.length > 1 ? 's' : ''}` : ''}${nn ? ` · ${nn} nage${nn > 1 ? 's' : ''} changée${nn > 1 ? 's' : ''}` : ''}</button></div>
+      <p class="note">À faire en arrivant au bord du bassin : absents et spé du jour, notés une seule fois pour toutes les séries.</p>`;
+    })() : ''}
     <h2>Séries prêtes</h2>
     ${secret ? `
       ${(() => {
@@ -955,7 +1060,11 @@ function renderSetup() {
     : `<p class="note">Code secret du Sheet, à saisir une seule fois sur cet appareil.</p>
       <div class="actions"><input id="f-secret" type="password" autocomplete="off" style="border:2px solid var(--line);border-radius:8px;padding:10px;min-height:48px;-webkit-user-select:text;user-select:text" aria-label="Code secret"><button class="btn go" id="save-secret">Enregistrer</button></div>`}
 
-    ${pend.length ? `<h2>À envoyer</h2><div class="actions"><button class="btn go big" id="send-all">Envoyer au Sheet (${pend.length} série${pend.length > 1 ? 's' : ''})</button></div>` : ''}
+    ${aval.length ? `<h2>À valider avant l'export (${aval.length})</h2>
+      <p class="note">Rien n'est parti au Sheet. Ouvre une série pour corriger les temps, noter les CB et les RPE, puis valide-la depuis son récap, ou toutes d'un coup.</p>
+      <div class="hist">${aval.map(h => `<button class="hist-item a-valider" data-i="${HIST.indexOf(h)}"><b>${esc(h.cfg.groupe)} · ${esc(nomSerie(h))} · ${h.cfg.nbRep} × ${h.cfg.distance}</b><span>${fmtDate(h.endedAt)}${withS(h, rpeMissing) ? ` · ${withS(h, rpeMissing)} RPE à noter` : ''}</span></button>`).join('')}</div>
+      <div class="actions"><button class="btn go big" id="valid-all">✓ Tout valider et envoyer (${aval.length})</button></div>` : ''}
+    ${pend.length ? `<div class="actions"><button class="btn big" id="send-all">Envoyer au Sheet (${pend.length} validée${pend.length > 1 ? 's' : ''} en attente)</button></div>` : ''}
 
     <details class="essai"><summary>Série d'essai (nageurs fictifs)</summary>
     <p class="note">Pour s'entraîner. Jamais envoyée au Sheet.</p>
@@ -976,8 +1085,8 @@ function renderSetup() {
     <div class="actions"><button class="btn go" id="start">Préparer la série d'essai</button></div>
     </details>
     <h2>Historique</h2>
-    ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.essai ? 'Essai' : esc(h.cfg.groupe) + ' · ' + esc(nomSerie(h))} · ${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)} · ${h.cfg.essai ? 'essai' : h.sentAt ? 'envoyée ✓' : 'à envoyer'}</span></button>`).join('')}</div>`
-      : `<p class="note">Les séries terminées arrivent ici. Tu pourras encore y corriger les temps.</p>`}
+    ${HIST.length ? `<div class="hist">${HIST.map((h, i) => `<button class="hist-item" data-i="${i}"><b>${h.cfg.essai ? 'Essai' : esc(h.cfg.groupe) + ' · ' + esc(nomSerie(h))} · ${h.cfg.nbRep} × ${h.cfg.distance} · départ ${fmtCycle(h.cfg.cycle)} · ${h.lanes.flat().length} nageurs</b><span>${fmtDate(h.endedAt)} · ${etatExport(h)}</span></button>`).join('')}</div>`
+      : `<p class="note">Les séries terminées arrivent ici. Tu peux y corriger temps, CB et RPE tant que tu ne les as pas validées.</p>`}
 
     <details class="essai"><summary>Réglages</summary>
       <div class="field" style="max-width:420px"><label for="f-view">Vue depuis ta place</label><select id="f-view">${VIEWS.map(([v, t]) => `<option value="${v}" ${v === c.view ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
@@ -998,8 +1107,13 @@ function renderSetup() {
     setLS(KEY_SECRET, v); render(); toast('Code secret enregistré sur cet appareil');
   };
   if ($('#load')) $('#load').onclick = () => autoChargement(true);
+  if ($('#appel')) $('#appel').onclick = ouvrirAppel;
   // À l'ouverture de l'accueil, avec du réseau : mise à jour seule si le dernier chargement date de plus de 5 min
   if (secret && !chargement && navigator.onLine !== false && (!PLAN || Date.now() - PLAN.loadedAt > 5 * 60000)) autoChargement(false);
+  if ($('#valid-all')) armed($('#valid-all'), `Confirmer : valider et envoyer ${aval.length} série${aval.length > 1 ? 's' : ''}`, async () => {
+    const b = $('#valid-all'); b.disabled = true; b.textContent = 'Envoi…';
+    const r = await valider(aValider()); toast(msgValide(r), 4000); render();
+  });
   if ($('#send-all')) $('#send-all').onclick = async () => {
     const b = $('#send-all'); b.disabled = true; b.textContent = 'Envoi…';
     try { const n = await envoyer(aEnvoyer()); toast(`${n} série${n > 1 ? 's' : ''} envoyée${n > 1 ? 's' : ''} au Sheet`); }
@@ -1043,7 +1157,7 @@ function renderChrono() {
   <div class="view">
     <div class="bar top">
       <button class="btn" id="home">Accueil</button>
-      ${PLAN ? '<button class="btn" id="plus">+ Série</button>' : ''}
+      ${PLAN ? `<button class="btn" id="plus">+ Série</button><button class="btn" id="appel">📋 Appel${appel().absents.length ? ` · ${appel().absents.length} abs.` : ''}</button>` : ''}
       <div class="chips">
         ${cartes.map(s => `<span class="carte"><button class="carte-nom" data-open="${s.uid}">▸ ${esc(nomSerie(s))} · ${detailSerie(s)} · ${s.lanes.flat().length} nag.</button><button class="carte-go" data-go="${s.uid}">Départ</button></span>`).join('')}
         ${finies.map(h => `<button class="chip fini" data-fini="${h.uid}">✓ ${esc(nomSerie(h))}${withS(h, rpeMissing) ? ' · RPE' : ''}</button>`).join('')}
@@ -1058,6 +1172,7 @@ function renderChrono() {
   </div>`;
   $('#home').onclick = () => { view = 'setup'; render(); };
   if ($('#plus')) $('#plus').onclick = openPlus;
+  if ($('#appel')) $('#appel').onclick = ouvrirAppel;
   $('#undo').onclick = undo; // « Terminer » est dans ⚙ et dans le Récap : loin d'« Annuler », qui sert sans cesse
   $('#app').querySelectorAll('[data-open]').forEach(b => b.onclick = () => { const s = serie(b.dataset.open); if (s) { S = s; rt().open = true; renderChrono(); } });
   $('#app').querySelectorAll('[data-go]').forEach(b => b.onclick = () => { const s = serie(b.dataset.go); if (s && !started(s)) { S = s; lancerDepart(Date.now()); } });
@@ -1598,10 +1713,11 @@ function renderRecap() {
       <thead><tr><th>Nageur</th>${reps.map(r => `<th>Rép. ${r + 1}${isCounted(r) ? ' · CB' : ''}</th>`).join('')}<th>Moy. · CB</th><th>RPE</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     <div class="actions"><button class="btn go big" id="rpe-all">Noter les RPE${rpeMissing() ? ` (${rpeMissing()} à noter)` : ''}</button>
-      ${S.done && !S.cfg.essai ? `<button class="btn big" id="send-one">${S.sentAt ? 'Renvoyer au Sheet' : 'Envoyer au Sheet'}</button>` : ''}
+      ${S.done && !S.cfg.essai && !S.validee && !S.sentAt ? `<button class="btn go big" id="valid-one">✓ Valider et envoyer</button>` : ''}
+      ${S.done && !S.cfg.essai && S.validee && !S.sentAt ? `<button class="btn big" id="send-one">Envoyer au Sheet</button>` : ''}
       ${S.done ? `<button class="btn big" id="again">Relancer${S.cfg.essai ? '' : ` · passage ${passagesFaits(S.cfg.idSerie) + 1}`}</button>` : ''}</div>
     ${S.done ? `<p class="note">« Relancer » rouvre la même série au bassin (mêmes nageurs, mêmes lignes, réglages gardés) pour un nouveau passage. Ce récap n'est pas modifié.</p>` : ''}
-    ${S.done ? `<p class="note">${S.cfg.essai ? "Série d'essai : elle reste sur cet appareil." : S.sentAt ? `Envoyée au Sheet le ${fmtDate(S.sentAt)}.` : 'Pas encore envoyée au Sheet. Elle reste en attente sur cet appareil.'}</p>` : ''}
+    ${S.done ? `<p class="note">${S.cfg.essai ? "Série d'essai : elle reste sur cet appareil." : S.sentAt ? `Envoyée au Sheet le ${fmtDate(S.sentAt)}. Une correction la fera repasser « à valider ».` : S.validee ? 'Validée · elle part au Sheet dès qu\'il y a du réseau.' : '<b>Pas encore validée</b> : corrige ce que tu veux (temps, CB, RPE), autant de fois que nécessaire. Rien ne part au Sheet avant « Valider ».'}</p>` : ''}
     <div class="actions">${S.done ? `<button class="btn danger" id="del">Supprimer de l'historique</button>` : `<button class="btn danger" id="end2">Terminer la série</button>`}</div>
   </div></div></div>`;
   $('#app').querySelectorAll('td.cell[data-r]').forEach(td => td.onclick = () => openFix(td.dataset.id, +td.dataset.r));
@@ -1611,6 +1727,10 @@ function renderRecap() {
     try { await envoyer([S]); toast('Série envoyée au Sheet'); } catch (e) { toast(e.message); }
     render();
   };
+  if ($('#valid-one')) armed($('#valid-one'), 'Confirmer : valider', async () => {
+    const b = $('#valid-one'); b.disabled = true; b.textContent = 'Envoi…';
+    const r = await valider([S]); toast(msgValide(r), 4000); render();
+  });
   $('#rpe-all').onclick = () => { const ids = S.lanes.flat(); openRpe(ids.find(id => rpeOf(id) == null) || ids[0], true); };
   if (S.done) {
     $('#home').onclick = () => { S = null; view = 'setup'; render(); autoEnvoi(); };
@@ -1626,8 +1746,69 @@ function renderRecap() {
   }
 }
 
+// ---------- Écran Appel de la séance ----------
+// Les nageurs des séries du jour (séries prêtes du Sheet datées d'aujourd'hui + séries ouvertes au bassin), par groupe.
+let retourAppel = 'setup';
+function nageursDuJour() {
+  const jour = jourCle(), par = {}, nag = Object.fromEntries(((PLAN && PLAN.nageurs) || []).map(n => [String(n.id_nageur), n]));
+  const noter = (id, groupe, nage, spe, nomDe) => {
+    const n = nag[id], x = par[id] || (par[id] = { id, groupe: String((n && n.groupe) || groupe || ''), nom: n ? (n.prenom ? `${n.prenom} ${n.nom}` : String(n.nom)) : nomDe, spe: '', series: 0 });
+    x.series++; if (spe && nage && !x.spe) x.spe = nage;
+  };
+  seriesPretes().filter(x => { const d = new Date(x.f.date_prevue); return isNaN(d) || jourCle(d) === jour; }).forEach(x => {
+    if (LIVE.some(s => s.cfg.idSerie === x.id)) return; // déjà ouverte : comptée avec les séries du bassin
+    const spe = new Set(x.rows.map(r => String(r.nage || '')).filter(Boolean)).size > 1;
+    x.rows.forEach(r => noter(String(r.id_nageur), x.f.groupe, String(r.nage || ''), spe, String(r.id_nageur)));
+  });
+  LIVE.filter(s => s.prevu && !s.cfg.essai).forEach(s => {
+    const spe = estSpe(s);
+    Object.keys(s.prevu.places).forEach(id => noter(id, s.cfg.groupe, s.prevu.nages[id], spe, (s.info[id] ? `${s.info[id].prenom} ${s.info[id].nom}` : id)));
+  });
+  return Object.values(par);
+}
+function ouvrirAppel() { retourAppel = view === 'appel' ? retourAppel : view; view = 'appel'; render(); }
+function renderAppel() {
+  const a = appel(), liste = nageursDuJour();
+  const groupes = [...new Set(liste.map(x => x.groupe))].sort();
+  const parties = LIVE.filter(s => started(s) && !s.cfg.essai).length;
+  const prevScroll = ($('#app .scroll') || {}).scrollTop || 0;
+  $('#app').innerHTML = `
+  <div class="view"><div class="scroll"><div class="panel" style="max-width:none">
+    <div class="bar"><h1>Appel de la séance</h1><div class="spacer"></div><button class="btn go big" id="ap-ok">OK</button></div>
+    <p class="note">Touche un nageur pour le passer <b>absent</b> (touche encore pour le remettre). Dans les séries spé, choisis sa nage du jour sous son nom (en pointillé : celle prévue).
+      C'est fait une fois pour toute la séance : toutes les séries pas encore parties sont mises à jour, et celles que tu ouvriras ensuite aussi.</p>
+    ${parties ? `<p class="note">⚠ ${parties} série${parties > 1 ? 's' : ''} déjà partie${parties > 1 ? 's' : ''} : elle${parties > 1 ? 's' : ''} ne change${parties > 1 ? 'nt' : ''} pas. Pour un nageur qui s'arrête en cours de série : appui long sur sa tuile › « Sort de l'eau ».</p>` : ''}
+    ${liste.length ? groupes.map(g => {
+      const nags = liste.filter(x => x.groupe === g).sort((p, q) => p.nom.localeCompare(q.nom));
+      const abs = nags.filter(x => a.absents.includes(x.id)).length;
+      return `<h2>${esc(g || 'Sans groupe')} · ${nags.length - abs} présent${nags.length - abs > 1 ? 's' : ''}${abs ? ` · ${abs} absent${abs > 1 ? 's' : ''}` : ''}</h2>
+      <div class="appel-grid">${nags.map(x => {
+        const ab = a.absents.includes(x.id), cur = a.nages[x.id] || x.spe;
+        return `<div class="appel-row ${ab ? 'abs' : ''}"><button class="appel-nom" data-abs="${esc(x.id)}"><b>${esc(x.nom)}</b><span>${ab ? 'absent' : a.nages[x.id] ? 'présent · nage changée' : 'présent'} · ${x.series} série${x.series > 1 ? 's' : ''}</span></button>
+          ${x.spe && !ab ? `<div class="appel-nages">${NAGES.map(([v, l, nom]) => `<button class="${v === cur ? 'on' : ''} ${v === x.spe ? 'prevu' : ''}" data-nid="${esc(x.id)}" data-nage="${v}" aria-label="${nom}">${l}</button>`).join('')}</div>` : ''}</div>`;
+      }).join('')}</div>`;
+    }).join('') : `<p class="note">Aucune série prévue aujourd'hui${PLAN ? '' : ' : charge d\'abord les séries depuis l\'accueil'}.</p>`}
+    ${a.absents.length || Object.keys(a.nages).length ? '<div class="actions"><button class="btn danger" id="ap-reset">Tout remettre comme prévu</button></div>' : ''}
+  </div></div></div>`;
+  $('#app .scroll').scrollTop = prevScroll;
+  const apres = msg => { ecrireAppel(a); const n = appliquerAppelPartout(); renderAppel(); toast(msg + (n ? ` · ${n} série${n > 1 ? 's' : ''} mise${n > 1 ? 's' : ''} à jour` : '')); };
+  $('#ap-ok').onclick = () => { view = retourAppel === 'chrono' && LIVE.length ? 'chrono' : 'setup'; render(); };
+  $('#app').querySelectorAll('[data-abs]').forEach(b => b.onclick = () => {
+    const id = b.dataset.abs, x = liste.find(y => y.id === id), ab = a.absents.includes(id);
+    a.absents = ab ? a.absents.filter(y => y !== id) : [...a.absents, id];
+    apres(`${x.nom} ${ab ? 'présent' : 'absent'}`);
+  });
+  $('#app').querySelectorAll('[data-nid]').forEach(b => b.onclick = () => {
+    const id = b.dataset.nid, x = liste.find(y => y.id === id), v = b.dataset.nage;
+    if (v === x.spe) delete a.nages[id]; else a.nages[id] = v;
+    apres(`${x.nom} · ${NAGES.find(n => n[0] === v)[2]}`);
+  });
+  if ($('#ap-reset')) armed($('#ap-reset'), 'Confirmer : tout le monde présent, nages prévues', () => { a.absents = []; a.nages = {}; apres('Appel remis comme prévu'); });
+}
+
 function render() {
   if (view === 'recap' && !S) view = LIVE.length ? 'chrono' : 'setup';
+  if (view === 'appel') { renderAppel(); return; }
   if (view === 'chrono' && !LIVE.length && !recentes().length) view = 'setup';
   if (view === 'setup') renderSetup();
   else if (view === 'chrono') renderChrono();
