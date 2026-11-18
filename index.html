@@ -268,6 +268,12 @@ input, select, textarea { font-size: 16px !important; }
 .appel-nages button.on { background: var(--nage); color: var(--nage-ink); border: 2px solid var(--nage); }
 .a-valider { border-left: 6px solid var(--hot); }
 /* Alerte de chevauchement (avant le départ) et écran « Couper en deux » */
+.dpt { display: inline-flex; }
+.dpt .btn { border-radius: 0; margin-left: -2px; }
+.dpt .btn:first-child { border-radius: 10px 0 0 10px; margin-left: 0; }
+.dpt .btn:last-child { border-radius: 0 10px 10px 0; }
+.dpt .dpt-v { font-family: var(--font-display); font-size: 20px; }
+.dpt-big { font-family: var(--font-display); font-weight: 700; font-size: 64px; text-align: center; line-height: 1; }
 .alerte { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--hot); color: var(--hot-ink); border-radius: 10px; padding: 6px 10px; font-weight: 600; }
 .alerte span { flex: 1 1 320px; }
 .alerte .btn { border-color: var(--hot-ink); }
@@ -300,7 +306,7 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 const KEY = 'chrono-maquette-v1';            // v10 : une seule série en cours. Reprise au premier lancement de la v11, puis vidée.
 const KEY_LIVE = 'chrono-live-v2';           // toutes les séries ouvertes (prêtes ou en cours)
 const KEY_HIST = 'chrono-maquette-historique-v1';
@@ -1370,8 +1376,9 @@ function renderHead(s) {
   const r = rt(s), essai = s.cfg.essai ? '<span class="tag-essai">Essai</span>' : '';
   if (!started(s)) {
     const cale = phaseTrotteuse() != null;
-    h.innerHTML = `<button class="b-nom" data-a="plier">${LIVE.length > 1 ? '▾ ' : ''}<b>${esc(nomSerie(s))}</b> ${detailSerie(s)} · départ ${fmtCycle(s.cfg.cycle)} · vagues ${s.cfg.vague}"${s.debut ? ` · <b>reprend ${repsReprise(s)}</b>` : ''}</button>${essai}
+    h.innerHTML = `<button class="b-nom" data-a="plier">${LIVE.length > 1 ? '▾ ' : ''}<b>${esc(nomSerie(s))}</b> ${detailSerie(s)} · vagues ${s.cfg.vague}"${s.debut ? ` · <b>reprend ${repsReprise(s)}</b>` : ''}</button>${essai}
       <span class="b-info"></span><div class="spacer"></div>
+      ${dptHtml(s)}
       <button class="btn go big" data-a="go">Départ</button>
       ${cale ? `<button class="btn" data-a="t60">Au 60 · <span class="num b-t60"></span></button><button class="btn" data-a="t30">Au 30 · <span class="num b-t30"></span></button>` : ''}
       ${r.departPrevu ? '<button class="btn danger" data-a="tstop">Annuler le départ programmé</button>' : ''}
@@ -1382,6 +1389,7 @@ function renderHead(s) {
   } else {
     h.innerHTML = `<span class="b-nom"><b>${esc(nomSerie(s))}</b> ${detailSerie(s)}</span>${essai}
       <span class="b-clock num"></span><span class="b-rep num"></span><div class="spacer"></div>
+      ${dptHtml(s)}
       <button class="btn" data-a="pause">⏸ Pause</button>
       <button class="btn go" data-a="ranger" hidden>✓ Ranger</button>
       <button class="btn" data-a="recap">Récap</button>
@@ -1399,6 +1407,8 @@ function headAction(a) {
   else if (a === 'add') openAdd();
   else if (a === 'regler') openRegler();
   else if (a === 'fixdep') corrigerDepart();
+  else if (a === 'dm' || a === 'dp') reglerDepart(depCourant() + (a === 'dp' ? 5 : -5));
+  else if (a === 'dset') openDepart();
   else if (a === 'fixvag') corrigerVague();
   else if (a === 'couper') openCouper();
   else if (a === 'pause') (S.pause ? openReprise() : pauser());
@@ -1499,6 +1509,44 @@ function arreterApres() {
 }
 // Nouveau départ (cycle) pour les répétitions à venir. Le prochain départ n'est jamais ramené à moins de 5 s :
 // dans ce cas le changement vaut à partir du départ suivant. Renvoie le n° de la 1re répétition qui part au nouveau cycle.
+// ---------- Départ réglable en un geste depuis la bande (v16, retour du 17/11, demande 4) ----------
+// « − Dpt 0:35 + » : avant le départ, change le départ de la série ; en cours, celui des rép. à venir (jamais à moins de 5 s).
+function depCourant() { return started(S) ? cycleAt(Math.max(0, nb() - 2)) : S.cfg.cycle; }
+function dptHtml(s) {
+  return withS(s, () => `<span class="dpt" role="group" aria-label="Départ"><button class="btn" data-a="dm" aria-label="Départ moins 5 secondes">−5"</button><button class="btn dpt-v" data-a="dset">Dpt <b class="num">${fmtCycle(depCourant())}</b></button><button class="btn" data-a="dp" aria-label="Départ plus 5 secondes">+5"</button></span>`);
+}
+function reglerDepart(c) {
+  c = Math.round(c);
+  if (c < 10) { toast('Départ trop court : 0:10 au minimum'); return; }
+  if (!started(S)) {
+    if (c === S.cfg.cycle) return;
+    pushUndo(`départ de ${nomSerie(S)}`); S.cfg.cycle = c; save(); renderChrono();
+    toast(`${nomSerie(S)} : départ ${fmtCycle(c)}`); return;
+  }
+  const r = changerDepart(c); renderChrono();
+  toast(r ? `${nomSerie(S)} : départ ${fmtCycle(c)} à partir de la rép. ${r}` : 'Plus de départ à venir : rien ne change');
+}
+function openDepart() {
+  layerUid = S.uid; const s = S; let v = depCourant();
+  const draw = () => {
+    $('#layer').innerHTML = `
+    <div class="overlay" id="ov"><div class="sheet" style="width:min(520px,100%)" role="dialog" aria-label="Départ">
+      <h2>Départ · ${esc(nomSerie(s))}</h2>
+      <p class="note">${started(s) ? 'Pour les rép. à venir. Les temps déjà pris ne bougent pas ; le prochain départ laisse toujours au moins 5".' : 'Pour toute la série.'}</p>
+      <div class="dpt-big num">${fmtCycle(v)}</div>
+      <div class="row">${[-10, -5, 5, 10].map(d => `<button class="btn big" data-d="${d}">${d > 0 ? '+' : '−'}${Math.abs(d)}"</button>`).join('')}</div>
+      <div class="field"><label for="d-val">Ou écris-le (1:40)</label><input id="d-val" type="text" inputmode="decimal" value="${fmtCycle(v)}"></div>
+      <button class="btn go big" id="d-ok">Appliquer · ${fmtCycle(v)}</button>
+      <button class="btn big" id="d-close">Fermer</button>
+    </div></div>`;
+    $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
+    $('#d-close').onclick = closeLayer;
+    $('#layer').querySelectorAll('[data-d]').forEach(b => b.onclick = () => { v = Math.max(10, v + +b.dataset.d); draw(); });
+    $('#d-val').onchange = () => { const x = parseTime($('#d-val').value); if (x) { v = x; draw(); } else toast('Départ illisible : écris par exemple 1:40'); };
+    $('#d-ok').onclick = () => { const x = parseTime($('#d-val').value) || v; closeLayer(); if (LIVE.includes(s)) { S = s; reglerDepart(x); } };
+  };
+  draw();
+}
 function changerDepart(c) {
   const L = repsLancees(); if (L < 1 || L >= nb()) return null;
   const avant = S.cyc || [], essai = k => avant.filter(x => x.k < k).concat({ k, c });
