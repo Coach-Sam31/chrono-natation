@@ -300,7 +300,7 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v15';
 const KEY = 'chrono-maquette-v1';            // v10 : une seule série en cours. Reprise au premier lancement de la v11, puis vidée.
 const KEY_LIVE = 'chrono-live-v2';           // toutes les séries ouvertes (prêtes ou en cours)
 const KEY_HIST = 'chrono-maquette-historique-v1';
@@ -426,12 +426,17 @@ function decale(t) {
   if (S.pause && t >= S.pause.at) t += Date.now() - S.pause.at;
   return t;
 }
-function dep(id, r) { return decale(S.T0 + repOffset(r) + (S.order[id][r] - 1) * S.cfg.vague * 1000); }
+// Groupe coupé en pleine série (v15) : chaque nageur reprend à SA prochaine rép. (S.debut[id]) dès le premier départ du groupe,
+// même si un nageur avait une rép. de retard sur les autres (cas typique d'une série qui chevauchait).
+function baseDe(id) { return S.debut && S.debut[id] != null ? repOffset(S.debut[id]) : 0; }
+function repsReprise(s) { const v = Object.values(s.debut || {}).map(k => k + 1), a = Math.min(...v), b = Math.max(...v); return a === b ? `rép. ${a}` : `rép. ${a} à ${b} selon le nageur`; }
+function baseTete() { return S.debut ? repOffset(Math.min(...Object.values(S.debut))) : 0; }
+function dep(id, r) { return decale(S.T0 - baseDe(id) + repOffset(r) + (S.order[id][r] - 1) * S.cfg.vague * 1000); }
 // Nombre de répétitions dont la tête de ligne est déjà partie (pauses comprises)
 function repsLancees() {
   if (S.T0 == null) return 0;
   const now = Date.now(); let n = 0;
-  for (let r = 0; r < nb(); r++) if (decale(S.T0 + repOffset(r)) <= now) n++;
+  for (let r = 0; r < nb(); r++) if (decale(S.T0 - baseTete() + repOffset(r)) <= now) n++;
   return n;
 }
 function pending(id) { return S.res[id].findIndex(x => !x); }
@@ -548,9 +553,15 @@ function corrigerVague() {
 // ---------- Couper une série en deux groupes (v13, avant le départ) ----------
 // Chaque groupe devient une série à part, avec son départ et sa vague, menée de front avec l'autre.
 // Dans le Sheet, les deux gardent le même id_serie et le même passage (les nageurs sont différents, rien ne s'écrase).
+// v15 : aussi en pleine série, entre deux rép. Seul un nageur au mur (pas dans l'eau, pas fini) change de groupe.
+// Ses temps déjà pris partent avec lui ; le groupe 2 attend son Départ et reprend à sa prochaine rép. (même numéro dans le Sheet).
+// Le groupe 1 continue sans s'arrêter ; ceux derrière les partants remontent à partir de la prochaine rép. de la tête.
+function deplacable(id) { if (!started(S)) return true; const p = pending(id); return p >= 0 && Date.now() < dep(id, p); }
 function couper(ids2) {
-  const s1 = S, set2 = new Set(ids2);
-  if (started(s1) || !ids2.length || ids2.length >= s1.laneOrder.flat().length) return null;
+  const s1 = S, set2 = new Set(ids2), parti = started(s1);
+  if (!ids2.length || ids2.length >= s1.laneOrder.flat().length || !ids2.every(deplacable)) return null;
+  const garde = parti ? Object.fromEntries(ids2.map(id => [id, { res: s1.res[id], p: pending(id), cb: s1.cb && s1.cb[id], rpe: s1.rpe && s1.rpe[id] }])) : {};
+  const from = parti ? repsLancees() : 0, cycle2 = parti ? cycleAt(Math.min(...ids2.map(id => pending(id)))) : s1.cfg.cycle;
   const nums = s1.laneOrder.map((_, l) => laneLabel(l));
   const lanes2 = s1.laneOrder.map(ids => ids.filter(id => set2.has(id)));
   const idx2 = lanes2.map((x, l) => (x.length ? l : -1)).filter(l => l >= 0);
@@ -558,11 +569,12 @@ function couper(ids2) {
   ['lanes', 'laneOrder', 'queue'].forEach(k => { s1[k] = s1[k].map(ids => ids.filter(id => !set2.has(id))); });
   const idx1 = s1.laneOrder.map((x, l) => (x.length ? l : -1)).filter(l => l >= 0);
   ['lanes', 'laneOrder', 'queue'].forEach(k => { s1[k] = idx1.map(l => s1[k][l]); });
-  ids2.forEach(id => { delete s1.order[id]; delete s1.res[id]; });
-  s1.laneOrder.forEach(ids => ids.forEach((id, k) => s1.order[id].fill(k + 1)));
+  ids2.forEach(id => { delete s1.order[id]; delete s1.res[id]; if (s1.cb) delete s1.cb[id]; if (s1.rpe) delete s1.rpe[id]; });
+  s1.laneOrder.forEach(ids => ids.forEach((id, k) => { for (let r = from; r < s1.order[id].length; r++) s1.order[id][r] = k + 1; }));
   s1.cfg.laneNums = idx1.map(l => nums[l]); s1.cfg.lanes = idx1.length; s1.cfg.perLane = Math.max(1, ...s1.laneOrder.map(x => x.length));
   // Groupe 2 : mêmes réglages, ses nageurs dans leurs lignes, dans le même ordre
   const cfg2 = JSON.parse(JSON.stringify(s1.cfg));
+  cfg2.cycle = cycle2; // en pleine série : le départ en cours pour la rép. où il reprend
   cfg2.laneNums = idx2.map(l => nums[l]); cfg2.lanes = idx2.length; cfg2.perLane = Math.max(1, ...idx2.map(l => lanes2[l].length));
   const lot = s1.lot || 'lot' + s1.uid, no = Math.max(1, ...LIVE.filter(x => x.lot === lot).map(x => x.groupeNo || 1));
   s1.lot = lot; s1.groupeNo = s1.groupeNo || 1;
@@ -574,7 +586,15 @@ function couper(ids2) {
   const s2 = buildSeries(cfg2, idx2.map(l => lanes2[l]), Object.assign({}, s1.names), JSON.parse(JSON.stringify(s1.info)));
   s2.lot = lot; s2.groupeNo = no + 1;
   if (s1.nagesRep) s2.nagesRep = Object.fromEntries(ids2.filter(id => s1.nagesRep[id]).map(id => [id, s1.nagesRep[id]]));
-  if (prevu) { // le groupe 2 repart de sa propre grille ; ce que l'appel avait déjà appliqué le suit
+  if (parti) {
+    ids2.forEach(id => { const g = garde[id]; s2.res[id] = g.res; if (g.cb) (s2.cb = s2.cb || {})[id] = g.cb; if (g.rpe != null) (s2.rpe = s2.rpe || {})[id] = g.rpe; });
+    s2.debut = Object.fromEntries(ids2.map(id => [id, garde[id].p])); // chacun reprend à sa prochaine rép.
+    s2.repDebut = Math.min(...ids2.map(id => garde[id].p));
+    s2.passage = s1.passage; s2.sortis = [];
+    s2.cfg.countReps = (s1.cfg.countReps || []).slice();
+    withS(s1, checkFinish);
+  }
+  if (prevu && !parti) { // le groupe 2 repart de sa propre grille ; ce que l'appel avait déjà appliqué le suit
     s2.prevu = { places: Object.fromEntries(s2.lanes.flatMap((ids, l) => ids.map((id, i) => [id, [l, i]]))), nages: Object.assign({}, prevu.nages), cibles: Object.assign({}, prevu.cibles) };
     s2.appelFait = JSON.parse(JSON.stringify(s1.appelFait || { absents: [], nages: {} }));
     s2.appelFait.absents = s2.appelFait.absents.filter(id => set2.has(id));
@@ -587,9 +607,12 @@ function couper(ids2) {
 }
 function openCouper() {
   layerUid = S.uid;
-  const s = S, moitie = () => s.laneOrder.flatMap(ids => ids.slice(Math.ceil(ids.length / 2)));
-  const parLigne = () => s.laneOrder.slice(Math.ceil(s.laneOrder.length / 2)).flat();
+  const s = S, ok = id => withS(s, () => deplacable(id)), parti = started(s);
+  const moitie = () => s.laneOrder.flatMap(ids => ids.slice(Math.ceil(ids.length / 2))).filter(ok);
+  const parLigne = () => s.laneOrder.slice(Math.ceil(s.laneOrder.length / 2)).flat().filter(ok);
   let sel = new Set(moitie());
+  // En pleine série, les nageurs arrivent pendant qu'on choisit : l'écran se remet à jour toutes les secondes.
+  let minuteur = parti ? setInterval(() => { if (!$('#c-ok')) { clearInterval(minuteur); return; } draw(); }, 1000) : null;
   const bilan = (ids, n) => {
     if (!ids.length) return `Groupe ${n} : vide`;
     const lo = s.laneOrder.map(l => l.filter(id => ids.includes(id))).filter(l => l.length);
@@ -597,25 +620,30 @@ function openCouper() {
     return `Groupe ${n} : ${ids.length} nageur${ids.length > 1 ? 's' : ''} · ` + (p ? `⚠ chevauche encore (tu pourras corriger départ ou vague sur sa bande)` : '✓ ça passe');
   };
   const draw = () => {
+    sel = new Set([...sel].filter(ok)); // parti à l'eau entre-temps : il reste dans le groupe 1
     const tous = s.laneOrder.flat(), g2 = tous.filter(id => sel.has(id)), g1 = tous.filter(id => !sel.has(id));
     $('#layer').innerHTML = `
     <div class="overlay" id="ov"><div class="sheet" style="width:min(720px,100%)" role="dialog" aria-label="Couper la série en deux">
       <h2>Couper en deux · ${esc(nomSerie(s))}</h2>
-      <p class="note">Touche un nageur pour le changer de groupe. Chaque groupe devient une série avec son propre Départ, menée en même temps que l'autre.</p>
+      <p class="note">Touche un nageur pour le changer de groupe. Chaque groupe devient une série avec son propre Départ, menée en même temps que l'autre.${parti ? ' <b>Série en cours</b> : le groupe 1 continue sans s\'arrêter ; le groupe 2 attend son Départ et reprend à sa prochaine rép. Un nageur dans l\'eau reste dans le groupe 1 tant qu\'il n\'est pas arrivé.' : ''}</p>
       <div class="row"><button class="btn" id="c-moitie">Moitié de chaque ligne</button>${s.laneOrder.length > 1 ? '<button class="btn" id="c-ligne">Une moitié des lignes</button>' : ''}</div>
-      ${s.laneOrder.map((ids, l) => `<div class="couper-ligne"><span class="lane-tag">${laneLabel(l)}</span>${ids.map(id => `<button class="chip ${sel.has(id) ? 'g2' : ''}" data-c="${esc(id)}">${esc(s.names[id])} · ${sel.has(id) ? '2' : '1'}</button>`).join('')}</div>`).join('')}
+      ${s.laneOrder.map((ids, l) => `<div class="couper-ligne"><span class="lane-tag">${laneLabel(l)}</span>${ids.map(id => ok(id)
+        ? `<button class="chip ${sel.has(id) ? 'g2' : ''}" data-c="${esc(id)}">${esc(s.names[id])} · ${sel.has(id) ? '2' : '1'}</button>`
+        : `<button class="chip" disabled>${esc(s.names[id])} · 1 (${withS(s, () => pending(id)) < 0 ? 'fini' : 'dans l\'eau'})</button>`).join('')}</div>`).join('')}
       <p class="note"><b>${bilan(g1, 1)}</b><br><b>${bilan(g2, 2)}</b></p>
       <button class="btn go big" id="c-ok" ${g1.length && g2.length ? '' : 'disabled'}>✂ Couper</button>
       <button class="btn big" id="c-close">Fermer</button>
     </div></div>`;
     $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
-    $('#c-close').onclick = closeLayer;
+    $('#c-close').onclick = () => { clearInterval(minuteur); closeLayer(); };
     $('#c-moitie').onclick = () => { sel = new Set(moitie()); draw(); };
     if ($('#c-ligne')) $('#c-ligne').onclick = () => { sel = new Set(parLigne()); draw(); };
     $('#layer').querySelectorAll('[data-c]').forEach(b => b.onclick = () => { const id = b.dataset.c; sel.has(id) ? sel.delete(id) : sel.add(id); draw(); });
     $('#c-ok').onclick = () => {
-      S = s; const s2 = couper(tous.filter(id => sel.has(id))); if (!s2) return;
-      closeLayer(); renderChrono(); toast(`Coupée : ${nomSerie(s)} et ${nomSerie(s2)}, chacune avec son Départ`, 3500);
+      S = s; const s2 = couper(tous.filter(id => sel.has(id)));
+      if (!s2) { draw(); toast('Un nageur choisi vient de partir : vérifie les groupes et touche encore « Couper »'); return; }
+      clearInterval(minuteur); closeLayer(); renderChrono();
+      toast(parti ? `Coupée : ${nomSerie(s)} continue · ${nomSerie(s2)} attend son Départ (reprend ${repsReprise(s2)})` : `Coupée : ${nomSerie(s)} et ${nomSerie(s2)}, chacune avec son Départ`, 4000);
     };
   };
   draw();
@@ -1342,7 +1370,7 @@ function renderHead(s) {
   const r = rt(s), essai = s.cfg.essai ? '<span class="tag-essai">Essai</span>' : '';
   if (!started(s)) {
     const cale = phaseTrotteuse() != null;
-    h.innerHTML = `<button class="b-nom" data-a="plier">${LIVE.length > 1 ? '▾ ' : ''}<b>${esc(nomSerie(s))}</b> ${detailSerie(s)} · départ ${fmtCycle(s.cfg.cycle)} · vagues ${s.cfg.vague}"</button>${essai}
+    h.innerHTML = `<button class="b-nom" data-a="plier">${LIVE.length > 1 ? '▾ ' : ''}<b>${esc(nomSerie(s))}</b> ${detailSerie(s)} · départ ${fmtCycle(s.cfg.cycle)} · vagues ${s.cfg.vague}"${s.debut ? ` · <b>reprend ${repsReprise(s)}</b>` : ''}</button>${essai}
       <span class="b-info"></span><div class="spacer"></div>
       <button class="btn go big" data-a="go">Départ</button>
       ${cale ? `<button class="btn" data-a="t60">Au 60 · <span class="num b-t60"></span></button><button class="btn" data-a="t30">Au 30 · <span class="num b-t30"></span></button>` : ''}
@@ -1460,7 +1488,7 @@ function plusRep() {
   setNbRep(n + 1);
   if ((S.cfg.countReps || []).includes(n)) S.cfg.countReps.push(n + 1); // la dernière était comptée : la nouvelle dernière l'est aussi
   // Si son départ est déjà passé (série finie ou presque), elle part dans 10 s.
-  const d = decale(S.T0 + repOffset(n));
+  const d = decale(S.T0 - baseTete() + repOffset(n));
   if (!S.pause && d < now + 5000) S.pauses = [...(S.pauses || []), { at: d, dur: now + 10000 - d }];
   touched(); save();
 }
@@ -1476,7 +1504,7 @@ function changerDepart(c) {
   const avant = S.cyc || [], essai = k => avant.filter(x => x.k < k).concat({ k, c });
   pushUndo(`départ ${fmtCycle(c)} (${nomSerie(S)})`);
   let k = L - 1; S.cyc = essai(k);
-  if (decale(S.T0 + repOffset(L)) < Date.now() + 5000) {
+  if (decale(S.T0 - baseTete() + repOffset(L)) < Date.now() + 5000) {
     k = L; if (k > nb() - 2) { S.cyc = avant; undoStack.pop(); return null; }
     S.cyc = essai(k);
   }
@@ -1493,6 +1521,7 @@ function openAjuster() {
     ${reste > 0 ? `<button class="btn danger" id="j-stop">Arrêter après la rép. ${L} (${reste} rép. retirée${reste > 1 ? 's' : ''})</button>
     <div class="field"><label for="j-cyc">Nouveau départ pour les rép. à venir</label>
       <div class="row"><input id="j-cyc" type="text" inputmode="decimal" value="${fmtCycle(cycleAt(Math.max(0, L - 1)))}"><button class="btn go" id="j-cyc-ok">Appliquer</button></div></div>` : ''}
+    ${S.laneOrder.flat().length > 1 && reste > 0 ? '<button class="btn" id="j-couper">✂ Couper en deux groupes (entre deux rép.)</button>' : ''}
     <button class="btn" id="j-top">⟲ Top 60 : recaler sur l'horloge du bassin</button>
     <button class="btn danger" id="j-end">Terminer la série maintenant</button>
     <button class="btn big" id="j-close">Fermer</button>
@@ -1510,6 +1539,7 @@ function openAjuster() {
     };
   }
   $('#j-top').onclick = () => { closeLayer(); topMural(); };
+  if ($('#j-couper')) $('#j-couper').onclick = openCouper;
   armed($('#j-end'), 'Confirmer : terminer la série', () => finishSeries(true));
 }
 
@@ -1686,7 +1716,7 @@ function tickSerie(now) {
     let cls = 'tile', time = '', meta = '', cd = '';
     const cible = cibleDe(id), ecart = x => (cible && x ? `cible ${fmtEcart(x.t - cible)} · ` : '');
     if (p < 0) { cls += ' done'; time = last ? fmt(last.t) : 'Fini'; meta = ecart(last) + 'série finie'; }
-    else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][0]}ᵉ départ`; meta = (cible ? `cible ${fmt(cible, 1)} · ` : '') + `rép. 1 / ${nb()}`; }
+    else if (S.T0 == null) { cls += ' wait'; time = `${S.order[id][p]}ᵉ départ`; meta = (cible ? `cible ${fmt(cible, 1)} · ` : '') + `rép. ${p + 1} / ${nb()}`; }
     else {
       const d = dep(id, p);
       meta = `rép. ${p + 1} / ${nb()}`;
