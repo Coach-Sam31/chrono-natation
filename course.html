@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Chrono">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#0b5aa3">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Chrono · Compétition</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Mode Course (C1, §13 du cahier) : mêmes couleurs et mêmes polices que l'entraînement (index.html). */
+:root {
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; height: 100%;
+  --bg: #e9f0f3; --surface: #ffffff; --ink: #06202c; --muted: #4f6873; --line: #b9cbd3;
+  --lane: #0b5aa3; --lane-ink: #ffffff; --hot: #ffd400; --hot-ink: #1a1600; --wait: #d5e0e5; --done: #dfe7ea;
+  --warn: #b93a07; --start: #d6141f; --start-ink: #ffffff; --wall: #0f2b3d; --wall-ink: #ffffff; --wall-muted: #b9d0dc;
+  --nage: #6a2fb5; --nage-ink: #ffffff; --cbq: #0a7d4f; --cbq-ink: #ffffff;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --font-body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #061118; --surface: #0f2430; --ink: #eaf4f8; --muted: #8fa9b4; --line: #26414e;
+    --lane: #4aa3ff; --lane-ink: #04121a; --hot: #ffd400; --hot-ink: #1a1600; --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c;
+    --nage: #b693ff; --nage-ink: #1a0b33; --cbq: #3ddc97; --cbq-ink: #04121a; --wall: #dfeaf0; --wall-ink: #06202c; --wall-muted: #3d5866; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #061118; --surface: #0f2430; --ink: #eaf4f8; --muted: #8fa9b4; --line: #26414e;
+  --lane: #4aa3ff; --lane-ink: #04121a; --hot: #ffd400; --hot-ink: #1a1600; --wait: #13303d; --done: #0a1a22; --warn: #ff8a4c;
+  --nage: #b693ff; --nage-ink: #1a0b33; --cbq: #3ddc97; --cbq-ink: #04121a; --wall: #dfeaf0; --wall-ink: #06202c; --wall-muted: #3d5866; color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.4;
+  padding-left: max(12px, env(safe-area-inset-left, 0px)); padding-right: max(12px, env(safe-area-inset-right, 0px));
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; overflow: hidden;
+}
+[hidden] { display: none !important; }
+#app { height: 100%; }
+* { touch-action: manipulation; }
+button, input, select, textarea { font: inherit; color: inherit; }
+input, select, textarea { font-size: 16px !important; } /* l'iPad zoome sur un champ plus petit */
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--lane); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+.view { height: 100%; display: flex; flex-direction: column; gap: 8px; padding-block: 10px 20px; box-sizing: border-box; }
+.scroll { overflow-y: auto; flex: 1; min-height: 0; }
+.panel { max-width: 860px; display: flex; flex-direction: column; gap: 16px; padding-bottom: 40px; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: 36px; margin: 0; }
+h2 { font-family: var(--font-display); font-weight: 700; font-size: 24px; margin: 0; }
+.note { color: var(--muted); margin: 0; max-width: 65ch; }
+.btn { border: 2px solid var(--ink); background: var(--surface); border-radius: 10px; padding: 10px 16px; font-weight: 600; min-height: 52px; }
+.btn.big { font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 8px 22px; }
+.btn.go { background: var(--lane); color: var(--lane-ink); border-color: var(--lane); }
+.btn.danger { border-color: var(--warn); color: var(--warn); }
+.btn:disabled { opacity: .35; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label, .lbl { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.field input, .field select, .field textarea, .nrow select, .nrow input { border: 2px solid var(--line); background: var(--surface); border-radius: 8px; padding: 10px; min-height: 48px; box-sizing: border-box; -webkit-user-select: text; user-select: text; }
+.choix { display: flex; gap: 6px; flex-wrap: wrap; }
+.choix button { min-width: 64px; min-height: 52px; border: 2px solid var(--line); border-radius: 10px; background: var(--surface); font-family: var(--font-display); font-weight: 700; font-size: 22px; padding: 4px 12px; }
+.choix button.on { background: var(--lane); color: var(--lane-ink); border-color: var(--lane); }
+.nrows { display: flex; flex-direction: column; gap: 8px; }
+.nrow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) 96px; gap: 8px; align-items: center; }
+@media (max-width: 600px) { .nrow { grid-template-columns: minmax(0, 1fr) 84px; } .nrow .libre { grid-column: 1; } }
+.hist { display: flex; flex-direction: column; gap: 8px; }
+.hist-row { display: flex; gap: 8px; align-items: stretch; }
+.hist-item { flex: 1; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; text-align: left; border: 2px solid var(--line); background: var(--surface); border-radius: 10px; padding: 12px 14px; min-height: 52px; }
+.hist-item span { color: var(--muted); font-size: 14px; }
+.hist-item.live { border-color: var(--lane); border-width: 3px; }
+.warn { color: var(--warn); font-weight: 700; }
+
+/* Écran Course : bandeau, gros Départ, une tuile par nageur rangée par couloir, pavé CB docké en bas */
+.bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bar .spacer { flex: 1; }
+.bar .btn { min-height: 48px; padding: 6px 14px; }
+.titre { font-family: var(--font-display); font-weight: 700; font-size: clamp(18px, 2.6vw, 26px); line-height: 1.1; }
+.titre small { display: block; font-weight: 600; font-size: .7em; color: var(--muted); }
+.b1 { flex: 1 1 360px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.b2 { display: flex; gap: 8px; align-items: center; }
+.clock { font-family: var(--font-display); font-weight: 700; font-size: clamp(34px, 6vw, 60px); line-height: 1; font-variant-numeric: tabular-nums; }
+.btn.undo { font-family: var(--font-display); font-size: 24px; font-weight: 700; padding: 6px 22px; min-height: 56px; }
+.depart { border: 0; border-radius: 14px; background: var(--start); color: var(--start-ink); font-family: var(--font-display); font-weight: 700; font-size: clamp(36px, 7vw, 64px); letter-spacing: .08em; min-height: clamp(84px, 14vh, 140px); touch-action: none; }
+.depart small { display: block; font-size: 16px; font-family: var(--font-body); font-weight: 600; letter-spacing: 0; }
+.grid { flex: 1; min-height: 0; display: grid; gap: 8px; }
+.card { display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 0; container-type: inline-size; }
+.tile {
+  flex: 1; min-height: 0; position: relative; border: 4px solid var(--lane); background: var(--surface); border-radius: 12px;
+  padding: 6px 10px; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; touch-action: none;
+  container-type: size; /* le texte se règle sur la taille de la tuile */
+}
+.t-top { display: flex; align-items: center; gap: 6px; font-family: var(--font-display); font-weight: 700; font-size: clamp(16px, min(15cqh, 13cqw), 40px); line-height: 1.1; white-space: nowrap; overflow: hidden; }
+.t-top .cl { background: var(--lane); color: var(--lane-ink); border-radius: 6px; padding: 0 .3em; flex-shrink: 0; }
+.t-top b { overflow: hidden; text-overflow: ellipsis; }
+.t-len { font-family: var(--font-display); font-weight: 700; font-size: clamp(14px, min(13cqh, 11cqw), 34px); line-height: 1.1; color: var(--lane); white-space: nowrap; overflow: hidden; }
+.t-split { font-family: var(--font-display); font-weight: 700; font-size: clamp(22px, min(30cqh, 24cqw), 110px); line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.t-cum, .t-run { font-size: clamp(12px, min(9cqh, 8cqw), 24px); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.t-cum { font-weight: 600; }
+.t-run { color: var(--muted); }
+.tile.down { background: var(--wait); }
+.tile.tapok { background: var(--lane) !important; color: var(--lane-ink) !important; }
+.tile.tapok .t-len, .tile.tapok .t-run { color: var(--lane-ink) !important; }
+.tile.refus { background: var(--warn) !important; border-color: var(--warn) !important; color: #fff !important; }
+.tile.refus .t-len, .tile.refus .t-run { color: #fff !important; }
+.tile.fini { background: var(--wall); border-color: var(--wall); color: var(--wall-ink); }
+.tile.fini .t-len, .tile.fini .t-run { color: var(--wall-muted); }
+.tile.ab { background: var(--done); border-style: dashed; border-color: var(--line); color: var(--muted); }
+.tile.ab .t-len { color: var(--warn); }
+.tile.avant { border-style: dashed; }
+/* Sous la tuile : 5 coulées + CB. Ce sont des boutons à part : jamais un tap mur. */
+.strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+@container (min-width: 380px) { .strip { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.cou { min-height: 52px; border: 2px solid var(--ink); border-radius: 10px; background: var(--surface); font-family: var(--font-display); font-weight: 700; font-size: 22px; padding: 0; touch-action: none; }
+.cou.on { background: var(--nage); color: var(--nage-ink); border-color: var(--nage); }
+.cou.cbb { border-color: var(--cbq); color: var(--cbq); }
+.cou.cbb.on { background: var(--cbq); color: var(--cbq-ink); }
+.cou:disabled { opacity: .3; }
+.grid.dense .cou { min-height: 44px; font-size: 18px; }
+.grid.dense .tile { padding: 4px 6px; border-width: 3px; }
+.pad { border: 3px solid var(--cbq); background: var(--surface); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.pad-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pad-head b { font-family: var(--font-display); font-size: 24px; }
+.pad-head span { color: var(--muted); flex: 1; }
+.pad-head .btn { min-height: 44px; padding: 6px 14px; }
+.pad-lens { display: flex; gap: 6px; flex-wrap: wrap; }
+.pad-len { border: 2px solid var(--line); background: var(--bg); border-radius: 8px; min-width: 52px; min-height: 48px; padding: 2px 8px; display: flex; flex-direction: column; align-items: center; touch-action: none; }
+.pad-len small { color: var(--muted); font-size: 11px; }
+.pad-len b { font-family: var(--font-display); font-size: 22px; line-height: 1.1; }
+.pad-len.on { border-color: var(--cbq); border-width: 3px; background: var(--surface); }
+.pad-keys { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+.pad-key { border: 2px solid var(--ink); background: var(--surface); border-radius: 10px; min-height: 56px; font-family: var(--font-display); font-weight: 700; font-size: 28px; touch-action: none; padding: 0; }
+.pad-key.go { background: var(--cbq); color: var(--cbq-ink); border-color: var(--cbq); }
+@media (max-width: 700px) { .pad-keys { grid-template-columns: repeat(6, minmax(0, 1fr)); } .pad-key { min-height: 50px; } }
+/* iPhone tenu debout : bandeau sur deux rangées, pavé plus serré, pour laisser la place aux tuiles */
+@media (max-width: 600px) {
+  .b2 { flex-basis: 100%; } .b2 .btn { flex: 1; } .b2 .btn.undo { flex: 2; } .b2 .long { display: none; }
+  .titre { font-size: 17px; } .clock { font-size: 34px; }
+  .bar .btn { min-height: 46px; padding: 4px 10px; }
+  .grid { gap: 6px; } .card { gap: 3px; } .strip { gap: 3px; }
+  .cou { min-height: 46px; font-size: 20px; }
+  .pad { padding: 6px; gap: 4px; }
+  .pad-head { gap: 6px; } .pad-head b { font-size: 20px; } .pad-head span { font-size: 12px; line-height: 1.2; }
+  .pad-head .btn { min-height: 40px; padding: 4px 10px; }
+  .pad-len { min-height: 40px; min-width: 44px; } .pad-len b { font-size: 18px; }
+  .pad-key { min-height: 46px; }
+}
+
+/* Récap */
+.nag { border: 2px solid var(--line); border-radius: 12px; background: var(--surface); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.nag-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--font-display); font-weight: 700; font-size: 26px; }
+.nag-head .cl { background: var(--lane); color: var(--lane-ink); border-radius: 6px; padding: 0 .3em; }
+.nag-head select { font-family: var(--font-body); font-weight: 600; border: 2px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 10px; min-height: 44px; }
+.alerte { background: var(--hot); color: var(--hot-ink); border-radius: 10px; padding: 8px 12px; font-weight: 600; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+td input, td select { border: 2px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 8px; min-height: 44px; box-sizing: border-box; width: 104px; -webkit-user-select: text; user-select: text; text-align: right; }
+td input.cbi { width: 64px; }
+td select { width: 84px; }
+td.manque { color: var(--warn); font-weight: 600; }
+td .mini { min-height: 40px; padding: 4px 8px; font-size: 13px; }
+textarea { width: 100%; min-height: 70px; resize: vertical; }
+
+.overlay { position: fixed; inset: 0; background: rgb(0 0 0 / .45); display: grid; place-items: center; padding: 16px; z-index: 20; }
+.sheet { background: var(--surface); color: var(--ink); border-radius: 14px; padding: 18px; width: min(560px, 100%); display: flex; flex-direction: column; gap: 12px; max-height: 90%; overflow-y: auto; box-sizing: border-box; }
+.trow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.trow b { flex: 1 1 140px; font-family: var(--font-display); font-size: 22px; }
+.trow .choix button { font-size: 18px; min-height: 48px; }
+/* Message en haut, et transparent au toucher : il ne doit jamais avaler un mur tapé dessous */
+.toast { pointer-events: none; position: fixed; left: 50%; transform: translateX(-50%); top: calc(70px + env(safe-area-inset-top, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; z-index: 30; max-width: 90vw; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="layer"></div>
+
+<script>
+const APP_VERSION = 'v17';
+const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { sens } } — à part des séries d'entraînement
+const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
+const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
+const NAGES = ['NL', 'Dos', 'Brasse', 'Pap', '4N'];
+const ORDRE_4N = ['Pap', 'Dos', 'Brasse', 'NL'];
+const COULEES = ['-5', '+5', '+7', '+10', '+14'];  // stockées en texte, exactement
+const DISTANCES = [25, 50, 100, 200, 400, 800, 1500];
+const S_PAR_M = 0.36;      // anti-goutte : pas deux murs à moins de 0,36 s/m × bassin (9" en 25 m)
+const CANCEL_MS = 900;     // toucher annulé par l'iPad : reste un tap s'il était bref
+const ROUVRIR_MS = 15 * 60000;
+
+// ---------- Outils (recopiés d'index.html) ----------
+const $ = (sel, root = document) => root.querySelector(sel);
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function fmt(sec, dec = 2) {
+  if (sec == null) return '';
+  const neg = sec < 0; sec = Math.abs(sec);
+  const u = 10 ** dec, t = Math.round(sec * u), m = Math.floor(t / (60 * u)), rest = t - m * 60 * u;
+  const ss = Math.floor(rest / u), frac = String(rest % u).padStart(dec, '0');
+  return (neg ? '−' : '') + (m ? `${m}'${String(ss).padStart(2, '0')}"${frac}` : `${ss}"${frac}`);
+}
+function fmtEdit(sec) { const m = Math.floor(sec / 60), s = (sec - m * 60).toFixed(2); return m ? `${m}:${s.padStart(5, '0')}` : s; }
+function parseTime(str) {
+  str = String(str).trim().replace(',', '.').replace(/"/g, '.').replace(/'/g, ':');
+  if (!str) return null;
+  const p = str.split(':');
+  const v = p.length === 2 ? Number(p[0]) * 60 + Number(p[1]) : Number(p[0]);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+function ecrire(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+function getLS(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function fmtDate(ts) { return new Date(ts).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+function fmtEcart(d) { return (d >= 0 ? '+' : '−') + Math.abs(d).toFixed(2).replace('.', ',') + '"'; }
+function armed(btn, confirmLabel, action) {
+  const label = btn.textContent;
+  btn.onclick = () => {
+    if (btn.dataset.armed) { action(); return; }
+    btn.dataset.armed = '1'; btn.textContent = confirmLabel;
+    setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = label; } }, 4000);
+  };
+}
+function toast(msg, ms = 2200) {
+  document.querySelectorAll('.toast').forEach(x => x.remove());
+  const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
+  document.body.appendChild(el); setTimeout(() => el.remove(), ms);
+}
+let audio = null;
+function bip(freq = 1000, duree = 0.07) {
+  if (getLS(KEY_SON) === '0') return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = freq; g.gain.value = 0.25;
+    o.connect(g); g.connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + duree);
+  } catch (e) {}
+}
+let wakeLock = null;
+async function keepAwake() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
+function lacherEcran() { try { if (wakeLock) wakeLock.release(); } catch (e) {} wakeLock = null; }
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && C && !C.done && C.T0 != null) keepAwake(); });
+
+// Principe de bindPress (index.html) : l'instant du toucher (pointerdown) fait foi, le doigt est capturé par l'élément,
+// l'action part au relâcher ; un toucher annulé par l'iPad (geste système) reste une action s'il était bref.
+// Chaque doigt est suivi à part : deux doigts sur deux tuiles = deux murs, jamais mélangés.
+const presses = new Map();
+function bindPress(el, action) {
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const t = Date.now();
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    presses.set(e.pointerId, { el, t, action });
+    el.classList.add('down');
+  });
+  const fin = (e, commit) => {
+    const p = presses.get(e.pointerId); if (!p || p.el !== el) return;
+    presses.delete(e.pointerId); el.classList.remove('down');
+    if (commit || Date.now() - p.t < CANCEL_MS) p.action(p.t);
+  };
+  el.addEventListener('pointerup', e => fin(e, true));
+  el.addEventListener('pointercancel', e => fin(e, false));
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+// ---------- Données ----------
+function chargerDB() {
+  try {
+    const d = JSON.parse(localStorage.getItem(KEY_COURSES));
+    if (d && Array.isArray(d.ouvertes) && Array.isArray(d.hist)) return Object.assign({ prefs: {} }, d);
+  } catch (e) {}
+  return { ouvertes: [], hist: [], prefs: {} };
+}
+let DB = chargerDB();
+let C = null;            // course affichée
+let view = 'accueil';    // accueil | course | recap
+const RT = { pad: null, form: null };  // jamais sauvegardé : pavé CB ouvert, formulaire en cours
+let alerteMem = 0;
+function save() {
+  if (ecrire(KEY_COURSES, DB)) return true;
+  if (Date.now() - alerteMem > 20000) { alerteMem = Date.now(); toast('⚠ Sauvegarde impossible : mémoire de l\'appareil pleine.', 7000); }
+  return false;
+}
+const PLAN = (() => { try { return JSON.parse(getLS(KEY_PLAN)); } catch (e) { return null; } })();
+const actif = n => n.actif !== false && String(n.actif).toUpperCase() !== 'FALSE';
+const NAGEURS = (PLAN && PLAN.nageurs || []).filter(actif);
+
+const nbL = c => c.distance / c.bassin;
+const nageL = (c, k) => c.nage === '4N' ? ORDRE_4N[Math.floor((k - 1) * 4 / nbL(c))] : c.nage;   // k : 1 à nbL
+const rappelCB = n => n === 'NL' || n === 'Dos' ? 'chaque bras' : 'le cycle';
+const prenom = s => s.prenom || s.nom;
+const nomComplet = s => s.prenom ? `${s.prenom} ${s.nom}` : s.nom;
+const coulTxt = v => v == null ? '' : String(v).replace('-', '−');
+function nomCourse(c) { return `${c.distance} ${c.nage} · ${c.bassin} m${c.serie ? ' · série ' + c.serie : ''}`; }
+const fini = (c, s) => s.murs.length >= nbL(c);
+const enCourse = (c, s) => !fini(c, s) && s.statut !== 'abandon';
+const toutFini = c => c.nageurs.every(s => !enCourse(c, s));
+// Longueur en cours (pour la coulée) : celle qui vient de commencer (départ plongé, puis après chaque virage).
+const lEnCours = (c, s) => Math.min(nbL(c), s.murs.length + 1);
+
+// Temps de passage (cumuls) mesurés, en secondes ; une correction du récap remplace la lecture des taps, qui restent gardés.
+function cumuls(c, s) {
+  if (s.cumuls) return s.cumuls.slice();
+  return Array.from({ length: nbL(c) }, (_, k) => s.murs[k] != null && c.T0 != null ? (s.murs[k] - c.T0) / 1000 : null);
+}
+function ecart(c, s) { const f = cumuls(c, s)[nbL(c) - 1]; return s.officiel != null && f != null ? s.officiel - f : null; }
+function cumulsRecales(c, s) { const e = ecart(c, s) || 0; return cumuls(c, s).map(v => v == null ? null : v + e); }
+function splits(arr) { return arr.map((v, k) => v == null ? null : k === 0 ? v : arr[k - 1] == null ? null : v - arr[k - 1]); }
+function statutAuto(c, s) { return cumuls(c, s).every(v => v != null) ? 'ok' : 'manque'; }
+function statut(c, s) { return s.statut || statutAuto(c, s); }
+
+// ---------- Gestes (chacun s'annule avec ↶ Annuler, Départ compris) ----------
+function pushUndo(e) { C.undo.push(e); }
+function libelleGeste(e) {
+  const s = C.nageurs[e.i];
+  if (e.t === 'depart') return 'Départ';
+  if (e.t === 'mur') return `mur de ${prenom(s)} (L${s.murs.length})`;
+  if (e.t === 'coulee') return `coulée de ${prenom(s)} (L${e.L})`;
+  if (e.t === 'cb') return `CB de ${prenom(s)} (L${e.L})`;
+  if (e.t === 'statut') return `statut de ${prenom(s)}`;
+  return 'geste';
+}
+function depart(t) {
+  const c = C; if (!c || c.done || c.T0 != null) return;
+  c.T0 = t; pushUndo({ t: 'depart' }); save();
+  bip(1200, 0.15); keepAwake(); renderCourse();
+}
+function mur(i, t) {
+  const c = C; if (!c || c.done) return;
+  const s = c.nageurs[i];
+  if (c.T0 == null) { refus(i); toast('Touche d\'abord DÉPART, au signal'); return; }
+  if (s.statut === 'abandon') { toast(`${prenom(s)} : abandon`); return; }
+  if (fini(c, s)) { toast(`${prenom(s)} a fini`); return; }
+  const prev = s.murs.length ? s.murs[s.murs.length - 1] : c.T0;
+  if (t - prev < S_PAR_M * c.bassin * 1000) { refus(i); bip(220, 0.25); return; } // goutte d'eau : rien d'enregistré
+  s.murs.push(t); pushUndo({ t: 'mur', i }); save();
+  bip(1000, 0.07); flash(i, 'tapok');
+  if (toutFini(c)) { finir(true); return; }
+  majCourse();
+}
+function coulee(i, v) {
+  const c = C; if (!c || c.done) return;
+  const s = c.nageurs[i]; if (!enCourse(c, s)) return;
+  const L = lEnCours(c, s), avant = s.coulees[L] ?? null;
+  if (avant === v) delete s.coulees[L]; else s.coulees[L] = v;   // 2e toucher sur le même = efface
+  pushUndo({ t: 'coulee', i, L, avant }); save(); majCourse();
+}
+function cbValeur(v) {
+  const c = C, p = RT.pad; if (!c || c.done || !p) return;
+  const s = c.nageurs[p.i], L = p.L, avant = s.cb[L] ?? null;
+  if (v == null) delete s.cb[L]; else s.cb[L] = String(Number(v));
+  pushUndo({ t: 'cb', i: p.i, L, avant }); save();
+  if (v != null) p.L = Math.min(nbL(c), L + 1);
+  p.buf = ''; majCourse();
+}
+function setStatut(i, v) {
+  const c = C; if (!c || c.done) return;
+  const s = c.nageurs[i]; if ((s.statut || null) === v) return;
+  pushUndo({ t: 'statut', i, avant: s.statut || null });
+  s.statut = v; save();
+  if (toutFini(c) && c.T0 != null) { fermerLayer(); finir(true); return; }
+  majCourse();
+}
+function annuler() {
+  const c = C; if (!c) return;
+  if (c.done) { if (peutRouvrir(c)) { rouvrir(c); annuler(); } return; }
+  const e = c.undo.pop(); if (!e) { toast('Rien à annuler'); return; }
+  const lib = libelleGeste(e);
+  const s = e.i != null ? c.nageurs[e.i] : null;
+  if (e.t === 'depart') c.T0 = null;
+  else if (e.t === 'mur') s.murs.pop();
+  else if (e.t === 'coulee') { if (e.avant == null) delete s.coulees[e.L]; else s.coulees[e.L] = e.avant; }
+  else if (e.t === 'cb') { if (e.avant == null) delete s.cb[e.L]; else s.cb[e.L] = e.avant; if (RT.pad && RT.pad.i === e.i) { RT.pad.L = e.L; RT.pad.buf = ''; } }
+  else if (e.t === 'statut') s.statut = e.avant;
+  save(); toast('Annulé : ' + lib);
+  if (e.t === 'depart') renderCourse(); else majCourse();
+}
+function finir(auto) {
+  const c = C;
+  c.done = true; c.endedAt = Date.now(); c.finAuto = auto;
+  DB.ouvertes = DB.ouvertes.filter(x => x !== c); DB.hist.unshift(c);
+  RT.pad = null; save(); lacherEcran();
+  if (auto) {
+    bip(1400, 0.2); toast('Course terminée ✓');
+    majCourse();
+    setTimeout(() => { if (C === c && c.done && view === 'course') { view = 'recap'; render(); } }, 1200);
+  } else { view = 'recap'; render(); }
+}
+const peutRouvrir = c => c.done && !c.retouche && c.undo.length && Date.now() - (c.endedAt || 0) < ROUVRIR_MS;
+function rouvrir(c) {
+  c.done = false; delete c.endedAt; delete c.finAuto;
+  DB.hist = DB.hist.filter(x => x !== c); DB.ouvertes.unshift(c);
+  save(); C = c; view = 'course'; keepAwake(); renderCourse();
+}
+
+// ---------- Accueil ----------
+function formDefaut() {
+  return { distance: 100, nage: 'NL', bassin: 25, serie: '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
+}
+function optionsNageurs(sel) {
+  const par = {};
+  NAGEURS.forEach(n => { const g = String(n.groupe || 'Autres'); (par[g] = par[g] || []).push(n); });
+  return `<option value="">— nageur —</option>` + Object.keys(par).sort().map(g => `<optgroup label="${esc(g)}">${par[g]
+    .sort((a, b) => String(a.prenom).localeCompare(String(b.prenom)))
+    .map(n => `<option value="${esc(n.id_nageur)}" ${String(n.id_nageur) === sel ? 'selected' : ''}>${esc(n.prenom)} ${esc(n.nom)}</option>`).join('')}</optgroup>`).join('');
+}
+function renderAccueil() {
+  const F = RT.form || (RT.form = formDefaut());
+  const lign = c => `${nomCourse(c)} · ${c.nageurs.map(prenom).map(esc).join(', ')}`;
+  $('#app').innerHTML = `
+  <div class="view"><div class="scroll"><div class="panel">
+    <div class="actions"><button class="btn" id="retour">← Entraînement</button></div>
+    <h1>🏁 Compétition</h1>
+    ${DB.ouvertes.length ? `<h2>Course ouverte</h2><div class="hist">${DB.ouvertes.map((c, k) => `
+      <div class="hist-row"><button class="hist-item live" data-o="${k}"><b>${c.T0 != null ? '▶ Reprendre' : 'Ouvrir'} · ${lign(c)}</b><span>${c.T0 != null ? 'en cours' : 'pas encore partie'}</span></button>
+      ${c.T0 == null ? `<button class="btn danger" data-del="${k}">Supprimer</button>` : ''}</div>`).join('')}</div>` : ''}
+    <h2>Nouvelle course</h2>
+    <div class="field"><span class="lbl">Nage</span><div class="choix" id="f-nage">${NAGES.map(n => `<button data-v="${n}" class="${F.nage === n ? 'on' : ''}">${n}</button>`).join('')}</div></div>
+    <div class="field"><span class="lbl">Distance</span><div class="choix" id="f-dist">${DISTANCES.map(d => `<button data-v="${d}" class="${F.distance === d ? 'on' : ''}">${d}</button>`).join('')}</div></div>
+    <div class="form">
+      <div class="field"><span class="lbl">Bassin</span><div class="choix" id="f-bassin">${[25, 50].map(b => `<button data-v="${b}" class="${F.bassin === b ? 'on' : ''}">${b} m</button>`).join('')}</div></div>
+      <div class="field"><label for="f-serie">Série</label><input id="f-serie" type="text" value="${esc(F.serie)}" placeholder="ex. 3"></div>
+    </div>
+    <p class="note" id="f-info"></p>
+    <div class="field"><span class="lbl">Nageurs suivis (1 à 4, jusqu'à 8) et couloir</span>
+      <div class="nrows">${F.rows.map((r, k) => `
+        <div class="nrow" data-k="${k}">
+          ${NAGEURS.length ? `<select data-r="id" aria-label="Nageur ${k + 1}">${optionsNageurs(r.id)}</select>` : ''}
+          <input class="libre" data-r="libre" type="text" value="${esc(r.libre)}" placeholder="${NAGEURS.length ? 'ou nom libre' : 'Prénom Nom'}" aria-label="Nom libre ${k + 1}">
+          <select data-r="couloir" aria-label="Couloir ${k + 1}"><option value="">Couloir</option>${Array.from({ length: 10 }, (_, j) => `<option value="${j}" ${String(r.couloir) === String(j) ? 'selected' : ''}>C${j}</option>`).join('')}</select>
+        </div>`).join('')}</div></div>
+    ${NAGEURS.length ? '' : '<p class="note">Aucun nageur chargé sur cet appareil (ils se chargent depuis l\'écran Entraînement, avec du réseau) : écris les noms.</p>'}
+    <div class="actions">${F.rows.length < 8 ? '<button class="btn" id="f-plus">+ Nageur</button>' : ''}
+      <button class="btn go big" id="f-creer">Créer la course</button></div>
+    <h2>Historique</h2>
+    ${DB.hist.length ? `<div class="hist">${DB.hist.map((c, k) => {
+      const alerte = c.nageurs.some(s => { const e = ecart(c, s); return e != null && Math.abs(e) > 1; });
+      return `<button class="hist-item" data-h="${k}"><b>${lign(c)}</b><span>${fmtDate(c.endedAt)}${alerte ? ' · <span class="warn">écart &gt; 1"</span>' : ''}</span></button>`;
+    }).join('')}</div>` : '<p class="note">Les courses terminées arrivent ici ; tu peux les rouvrir et les corriger autant que tu veux.</p>'}
+    <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étape C1 : rien n'est envoyé au Sheet).</p>
+  </div></div></div>`;
+  const info = () => {
+    const n = F.distance / F.bassin;
+    $('#f-info').innerHTML = Number.isInteger(n) ? `${n} longueur${n > 1 ? 's' : ''}${F.nage === '4N' && n % 4 === 0 ? ' · ' + Array.from({ length: n }, (_, k) => ORDRE_4N[Math.floor(k * 4 / n)]).join(', ') : ''}${F.nage === '4N' && n % 4 ? ' · <span class="warn">en 4N, il faut un nombre de longueurs multiple de 4</span>' : ''}` : '<span class="warn">Distance impossible dans ce bassin</span>';
+  };
+  info();
+  const choix = (id, key, num) => $('#app').querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => {
+    F[key] = num ? Number(b.dataset.v) : b.dataset.v;
+    $('#app').querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('on', x === b)); info();
+  });
+  choix('f-nage', 'nage'); choix('f-dist', 'distance', true); choix('f-bassin', 'bassin', true);
+  $('#f-serie').oninput = e => F.serie = e.target.value;
+  $('#app').querySelectorAll('.nrow [data-r]').forEach(el => el.oninput = el.onchange = () => { F.rows[+el.closest('.nrow').dataset.k][el.dataset.r] = el.value; });
+  if ($('#f-plus')) $('#f-plus').onclick = () => { F.rows.push({ id: '', libre: '', couloir: '' }); renderAccueil(); };
+  $('#f-creer').onclick = creerCourse;
+  $('#retour').onclick = () => { location.href = 'index.html'; };
+  $('#app').querySelectorAll('[data-o]').forEach(b => b.onclick = () => { C = DB.ouvertes[+b.dataset.o]; view = 'course'; if (C.T0 != null) keepAwake(); render(); });
+  $('#app').querySelectorAll('[data-del]').forEach(b => armed(b, 'Confirmer', () => { DB.ouvertes.splice(+b.dataset.del, 1); save(); render(); }));
+  $('#app').querySelectorAll('[data-h]').forEach(b => b.onclick = () => { C = DB.hist[+b.dataset.h]; view = 'recap'; render(); });
+}
+function creerCourse() {
+  const F = RT.form, n = F.distance / F.bassin;
+  if (!Number.isInteger(n) || n < 1) { toast('Distance impossible dans ce bassin'); return; }
+  if (F.nage === '4N' && n % 4) { toast('En 4N, il faut un nombre de longueurs multiple de 4 (100 en 25 m, 200 en 50 m…)', 4000); return; }
+  const nageurs = [];
+  for (const r of F.rows) {
+    const n0 = r.id ? NAGEURS.find(x => String(x.id_nageur) === r.id) : null;
+    const libre = r.libre.trim();
+    if (!n0 && !libre) continue;
+    const p = n0 ? { id_nageur: String(n0.id_nageur), nom: String(n0.nom), prenom: String(n0.prenom) }
+      : (() => { const m = libre.split(/\s+/); return { id_nageur: '', prenom: m[0], nom: m.slice(1).join(' ') }; })();
+    if (r.couloir === '') { toast(`Couloir de ${p.prenom || p.nom} ?`); return; }
+    nageurs.push(Object.assign(p, { couloir: Number(r.couloir), murs: [], coulees: {}, cb: {}, statut: null, remarque: '', officiel: null, cumuls: null }));
+  }
+  if (!nageurs.length) { toast('Choisis au moins un nageur'); return; }
+  const cl = nageurs.map(s => s.couloir);
+  if (new Set(cl).size !== cl.length) { toast('Deux nageurs dans le même couloir'); return; }
+  const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: F.distance, nage: F.nage, bassin: F.bassin,
+    serie: F.serie.trim(), nageurs, T0: null, undo: [], done: false };
+  DB.ouvertes.unshift(c); save();
+  RT.form = Object.assign(formDefaut(), { distance: F.distance, nage: F.nage, bassin: F.bassin });
+  C = c; view = 'course'; render();
+}
+
+// ---------- Écran Course ----------
+const sens = () => DB.prefs.sens === 'd' ? 'd' : 'g';
+function ordreTuiles(c) {
+  const o = c.nageurs.map((s, i) => i).sort((a, b) => c.nageurs[a].couloir - c.nageurs[b].couloir);
+  return sens() === 'd' ? o.reverse() : o;
+}
+function renderCourse() {
+  const c = C, part = c.T0 != null;
+  presses.clear();
+  $('#app').innerHTML = `
+  <div class="view">
+    <div class="bar">
+      <div class="b1"><button class="btn" id="c-home" aria-label="Accueil Compétition">←</button>
+        <div class="titre">${esc(nomCourse(c))}<small>${nbL(c)} longueurs</small></div>
+        <div class="spacer"></div>
+        <div class="clock" id="c-clock">${part ? '' : '0"0'}</div></div>
+      <div class="b2"><button class="btn" id="c-sens" aria-label="Changer le sens des couloirs">⇄<span class="long"> C1 à ${sens() === 'd' ? 'droite' : 'gauche'}</span></button>
+        ${part ? '<button class="btn" id="c-fin">Terminer</button>' : ''}
+        <button class="btn undo" id="c-undo">↶ ANNULER</button></div>
+    </div>
+    ${part ? '' : '<button class="depart" id="c-go">DÉPART<small>à taper au signal du starter</small></button>'}
+    <div class="grid${c.nageurs.length > 4 ? ' dense' : ''}" id="c-grid">${ordreTuiles(c).map(i => `
+      <div class="card" data-i="${i}">
+        <div class="tile" id="t-${i}">
+          <div class="t-top"><span class="cl">C${c.nageurs[i].couloir}</span><b>${esc(prenom(c.nageurs[i]))}</b></div>
+          <div class="t-len"></div><div class="t-split"></div><div class="t-cum"></div><div class="t-run"></div>
+        </div>
+        <div class="strip">${COULEES.map(v => `<button class="cou" data-v="${v}">${coulTxt(v)}</button>`).join('')}<button class="cou cbb">CB</button></div>
+      </div>`).join('')}
+    </div>
+    <div class="pad" id="c-pad" hidden></div>
+  </div>`;
+  $('#c-home').onclick = () => { RT.pad = null; view = 'accueil'; render(); };
+  $('#c-sens').onclick = () => { DB.prefs.sens = sens() === 'd' ? 'g' : 'd'; save(); renderCourse(); };
+  bindPress($('#c-undo'), () => annuler());
+  if ($('#c-fin')) $('#c-fin').onclick = ouvrirTerminer;
+  if ($('#c-go')) bindPress($('#c-go'), t => depart(t));
+  $('#app').querySelectorAll('.card').forEach(card => {
+    const i = +card.dataset.i;
+    bindPress(card.querySelector('.tile'), t => mur(i, t));
+    card.querySelectorAll('.cou[data-v]').forEach(b => bindPress(b, () => coulee(i, b.dataset.v)));
+    bindPress(card.querySelector('.cbb'), () => basculerPad(i));
+  });
+  grille(); majCourse();
+}
+function grille() {
+  const g = $('#c-grid'); if (!g) return;
+  const n = C.nageurs.length, w = g.clientWidth || window.innerWidth;
+  let cols = Math.min(n, Math.max(1, Math.floor(w / 170)));
+  const rows = Math.ceil(n / cols); cols = Math.ceil(n / rows);
+  g.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  g.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+}
+window.addEventListener('resize', () => { if (view === 'course') grille(); });
+function flash(i, cls) {
+  const el = $('#t-' + i); if (!el) return;
+  el.classList.remove('tapok', 'refus'); void el.offsetWidth; el.classList.add(cls);
+  clearTimeout(el._fl); el._fl = setTimeout(() => el.classList.remove(cls), cls === 'refus' ? 600 : 250);
+}
+function refus(i) { flash(i, 'refus'); }
+// Mise à jour en place (sans redessiner les tuiles : un doigt posé n'est jamais perdu)
+function majCourse() {
+  const c = C; if (view !== 'course' || !c) return;
+  const now = Date.now(), n = nbL(c);
+  c.nageurs.forEach((s, i) => {
+    const el = $('#t-' + i); if (!el) return;
+    const cum = cumuls(c, s), k = s.murs.length, sp = splits(cum);
+    const ab = s.statut === 'abandon', f = fini(c, s);
+    el.classList.toggle('fini', f && !ab); el.classList.toggle('ab', ab); el.classList.toggle('avant', c.T0 == null);
+    const L = lEnCours(c, s);
+    $('.t-len', el).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `L${L}/${n} · ${nageL(c, L)}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
+    $('.t-split', el).textContent = k ? fmt(sp[k - 1]) : '—';
+    $('.t-cum', el).textContent = k ? `${f ? 'final' : 'cumul'} ${fmt(cum[k - 1])}${s.cb[k] ? ' · CB ' + s.cb[k] : ''}` : (c.T0 == null ? 'attend le départ' : 'L1 en cours');
+    $('.t-run', el).textContent = c.T0 == null ? '' : f ? '' : ab ? '' : fmt((now - c.T0) / 1000, 1);
+    const card = el.parentNode;
+    card.querySelectorAll('.cou[data-v]').forEach(b => { b.classList.toggle('on', !f && s.coulees[L] === b.dataset.v); b.disabled = !enCourse(c, s) || c.done; });
+    const cbb = card.querySelector('.cbb'); cbb.classList.toggle('on', !!RT.pad && RT.pad.i === i); cbb.disabled = c.done;
+  });
+  const u = $('#c-undo'); if (u) u.disabled = !c.undo.length && !peutRouvrir(c);
+  majPad(); majHorloge();
+}
+function majHorloge() {
+  const c = C, el = $('#c-clock'); if (!el || !c) return;
+  if (c.T0 == null) { el.textContent = '0"0'; return; }
+  if (c.done || toutFini(c)) { const m = Math.max(...c.nageurs.map(s => s.murs.length ? s.murs[s.murs.length - 1] : c.T0)); el.textContent = fmt((m - c.T0) / 1000, 2); return; }
+  el.textContent = fmt((Date.now() - c.T0) / 1000, 1);
+  c.nageurs.forEach((s, i) => { const r = $('#t-' + i + ' .t-run'); if (r && enCourse(c, s)) r.textContent = fmt((Date.now() - c.T0) / 1000, 1); });
+}
+setInterval(() => { if (view === 'course') majHorloge(); }, 100);
+
+// Pavé CB docké en bas : ne couvre aucune tuile. 2 chiffres = CB de la longueur choisie, puis longueur suivante.
+function basculerPad(i) {
+  const c = C; if (!c || c.done) return;
+  if (RT.pad && RT.pad.i === i) RT.pad = null;
+  else RT.pad = { i, L: Math.max(1, Math.min(nbL(c), c.nageurs[i].murs.length)), buf: '' };
+  majCourse(); grille();
+}
+function majPad() {
+  const box = $('#c-pad'), c = C, p = RT.pad; if (!box) return;
+  if (!p || c.done) { if (!box.hidden) { box.hidden = true; box.innerHTML = ''; box._i = null; } return; }
+  const s = c.nageurs[p.i], n = nbL(c), nageCourante = nageL(c, p.L);
+  if (box.hidden || box._i !== p.i) {
+    box.hidden = false; box._i = p.i;
+    box.innerHTML = `
+      <div class="pad-head"><b>CB · C${s.couloir} ${esc(prenom(s))}</b><span id="pad-info"></span><button class="btn" id="pad-x">Fermer</button></div>
+      <div class="pad-lens">${Array.from({ length: n }, (_, k) => `<button class="pad-len" data-len="${k + 1}"><small>L${k + 1} ${nageL(c, k + 1)}</small><b></b></button>`).join('')}</div>
+      <div class="pad-keys">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map(d => `<button class="pad-key" data-d="${d}">${d}</button>`).join('')}<button class="pad-key" data-d="del">⌫</button><button class="pad-key go" data-d="ok">✓</button></div>`;
+    bindPress($('#pad-x'), () => { RT.pad = null; majCourse(); grille(); });
+    box.querySelectorAll('.pad-len').forEach(b => bindPress(b, () => { if (!RT.pad) return; RT.pad.L = +b.dataset.len; RT.pad.buf = ''; majCourse(); }));
+    box.querySelectorAll('.pad-key').forEach(b => bindPress(b, () => touchePad(b.dataset.d)));
+  }
+  $('#pad-info', box).textContent = `L${p.L} ${nageCourante} : ${p.buf ? p.buf + '…' : 'tape 2 chiffres'} · rappel : crawl/dos = chaque bras ; brasse/pap = le cycle (ici : ${rappelCB(nageCourante)})`;
+  box.querySelectorAll('.pad-len').forEach(b => {
+    const L = +b.dataset.len; b.classList.toggle('on', L === p.L);
+    $('b', b).textContent = L === p.L && p.buf ? p.buf + '…' : (s.cb[L] ?? '·');
+  });
+}
+function touchePad(d) {
+  const p = RT.pad; if (!p) return;
+  if (d === 'del') { if (p.buf) { p.buf = p.buf.slice(0, -1); majCourse(); } else if (C.nageurs[p.i].cb[p.L] != null) cbValeur(null); return; }
+  if (d === 'ok') { if (p.buf) cbValeur(p.buf); return; }
+  p.buf += d;
+  if (p.buf.length >= 2) cbValeur(p.buf); else majCourse();
+}
+
+// « Terminer » : statut par nageur (abandon, DSQ) pendant que la course continue, ou fin de la course tout de suite.
+function ouvrirTerminer() {
+  const c = C;
+  const dessine = () => {
+    $('#layer').innerHTML = `<div class="overlay" id="ov"><div class="sheet">
+      <h2>Terminer</h2>
+      <p class="note">Abandon : la tuile s'arrête, les autres continuent. DSQ : noté, la tuile continue (le nageur finit sa course).</p>
+      ${c.nageurs.map((s, i) => `<div class="trow"><b>C${s.couloir} ${esc(prenom(s))}</b>${fini(c, s) && s.statut !== 'abandon' ? `<span class="note">arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}</span>` : ''}
+        <div class="choix">${[[null, 'Nage'], ['abandon', 'Abandon'], ['dsq', 'DSQ']].map(([v, t]) => `<button data-i="${i}" data-v="${v || ''}" class="${(s.statut || null) === v ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}
+      <button class="btn danger big" id="t-fin">Fin de la course maintenant</button>
+      <p class="note">Les longueurs non tapées seront « manque ».</p>
+      <button class="btn" id="t-x">Fermer</button>
+    </div></div>`;
+    $('#layer').querySelectorAll('.choix button').forEach(b => b.onclick = () => { setStatut(+b.dataset.i, b.dataset.v || null); if (!c.done) dessine(); });
+    armed($('#t-fin'), 'Confirmer : fin de la course', () => { fermerLayer(); finir(false); });
+    $('#t-x').onclick = fermerLayer;
+    $('#ov').onclick = e => { if (e.target.id === 'ov') fermerLayer(); };
+  };
+  dessine();
+}
+function fermerLayer() { $('#layer').innerHTML = ''; }
+
+// ---------- Récap (corrigeable à volonté) ----------
+function renderRecap() {
+  const c = C, n = nbL(c);
+  $('#app').innerHTML = `
+  <div class="view"><div class="scroll"><div class="panel">
+    <div class="actions"><button class="btn" id="r-home">← Compétition</button>
+      ${peutRouvrir(c) ? `<button class="btn" id="r-rouvrir">↶ Annuler le dernier geste (rouvre la course)</button>` : ''}</div>
+    <h1>${esc(nomCourse(c))}</h1>
+    <p class="note">${c.endedAt ? 'Terminée le ' + fmtDate(c.endedAt) : ''} · ${n} longueurs. Corrige un temps de passage (cumul) si un mur a été mal tapé : le split se recalcule. Les taps d'origine restent gardés.</p>
+    <div class="form"><div class="field"><label for="r-serie">Série</label><input id="r-serie" type="text" value="${esc(c.serie || '')}"></div></div>
+    ${c.nageurs.map((s, i) => blocNageur(c, s, i)).join('')}
+  </div></div></div>`;
+  $('#r-home').onclick = () => { view = 'accueil'; render(); };
+  if ($('#r-rouvrir')) $('#r-rouvrir').onclick = () => { rouvrir(c); annuler(); };
+  $('#r-serie').onchange = e => { c.serie = e.target.value.trim(); retouche(); };
+  $('#app').querySelectorAll('[data-f]').forEach(el => {
+    const ev = el.tagName === 'BUTTON' ? 'onclick' : 'onchange';
+    el[ev] = () => editRecap(el.dataset.f, +el.dataset.i, el.dataset.k == null ? null : +el.dataset.k, el.value, el);
+  });
+}
+function blocNageur(c, s, i) {
+  const n = nbL(c), cum = cumuls(c, s), e = ecart(c, s), rec = cumulsRecales(c, s), sp = splits(e != null ? rec : cum);
+  const st = statut(c, s), final = cum[n - 1];
+  return `<section class="nag">
+    <div class="nag-head"><span class="cl">C${s.couloir}</span>${esc(nomComplet(s))}
+      <select data-f="statut" data-i="${i}" aria-label="Statut">${[['', `auto : ${statutAuto(c, s)}`], ['abandon', 'abandon'], ['dsq', 'dsq'], ['forfait', 'forfait']].map(([v, t]) => `<option value="${v}" ${(s.statut || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <span class="note">statut : <b>${st}</b></span></div>
+    <div class="form">
+      <div class="field"><label>Temps final mesuré</label><div class="num" style="font-size:22px;font-weight:700;min-height:48px;display:flex;align-items:center">${final != null ? fmt(final) : '—'}</div></div>
+      <div class="field"><label for="off-${i}">Temps officiel</label><input id="off-${i}" data-f="officiel" data-i="${i}" type="text" inputmode="decimal" placeholder="1:05.12" value="${s.officiel != null ? fmtEdit(s.officiel) : ''}"></div>
+      <div class="field"><label>Écart (officiel − mesuré)</label><div class="num" style="font-size:22px;font-weight:700;min-height:48px;display:flex;align-items:center">${e != null ? fmtEcart(e) : '—'}</div></div>
+    </div>
+    ${e != null && Math.abs(e) > 1 ? `<div class="alerte">⚠ Écart de plus d'1" : un mur oublié ou en trop ? Vérifie les splits avant de garder le recalage.</div>` : ''}
+    ${s.officiel != null && final == null ? `<div class="alerte">Pas de temps final mesuré : le recalage ne s'applique pas.</div>` : ''}
+    <div class="tablewrap"><table>
+      <thead><tr><th>Long.</th><th>Nage</th><th>Split${e != null ? ' (recalé)' : ''}</th><th>Cumul mesuré</th>${e != null ? '<th>Cumul recalé</th>' : ''}<th>Coulée</th><th>CB</th><th></th></tr></thead>
+      <tbody>${Array.from({ length: n }, (_, k) => `<tr>
+        <td>L${k + 1}</td><td>${nageL(c, k + 1)}</td>
+        <td class="${cum[k] == null ? 'manque' : ''}">${cum[k] == null ? 'manque' : sp[k] == null ? '—' : (sp[k] <= 0 ? '⚠ ' : '') + fmt(sp[k])}</td>
+        <td><input data-f="cumul" data-i="${i}" data-k="${k}" type="text" inputmode="decimal" value="${cum[k] != null ? fmtEdit(cum[k]) : ''}" placeholder="manque" aria-label="Cumul L${k + 1}"></td>
+        ${e != null ? `<td>${rec[k] != null ? fmt(rec[k]) : ''}</td>` : ''}
+        <td><select data-f="coulee" data-i="${i}" data-k="${k}" aria-label="Coulée L${k + 1}"><option value="">—</option>${COULEES.map(v => `<option value="${v}" ${s.coulees[k + 1] === v ? 'selected' : ''}>${coulTxt(v)}</option>`).join('')}</select></td>
+        <td><input class="cbi" data-f="cb" data-i="${i}" data-k="${k}" type="text" inputmode="numeric" value="${esc(s.cb[k + 1] ?? '')}" aria-label="CB L${k + 1}"></td>
+        <td><button class="btn mini" data-f="oublie" data-i="${i}" data-k="${k}" title="Un mur a été oublié avant celui-ci">+ oublié</button>
+            <button class="btn mini" data-f="trop" data-i="${i}" data-k="${k}" title="Ce mur est en trop">✕ en trop</button></td>
+      </tr>`).join('')}</tbody></table></div>
+    ${s.cumuls ? `<div class="actions"><button class="btn" data-f="bruts" data-i="${i}">Revenir aux taps d'origine</button></div>` : ''}
+    <div class="field"><label for="rq-${i}">Remarque</label><textarea id="rq-${i}" data-f="remarque" data-i="${i}">${esc(s.remarque || '')}</textarea></div>
+  </section>`;
+}
+function retouche() { C.retouche = true; save(); }
+function editRecap(f, i, k, val, el) {
+  const c = C, s = c.nageurs[i], n = nbL(c);
+  if (f === 'statut') s.statut = val || null;
+  else if (f === 'officiel') { const v = String(val).trim() ? parseTime(val) : null; if (String(val).trim() && v == null) { toast('Temps illisible : écris par ex. 1:05.12'); renderRecap(); return; } s.officiel = v; }
+  else if (f === 'remarque') s.remarque = val;
+  else if (f === 'coulee') { if (val) s.coulees[k + 1] = val; else delete s.coulees[k + 1]; }
+  else if (f === 'cb') { const v = String(val).trim(); if (v && !/^\d{1,3}$/.test(v)) { toast('CB : un nombre'); renderRecap(); return; } if (v) s.cb[k + 1] = String(Number(v)); else delete s.cb[k + 1]; }
+  else if (f === 'cumul') {
+    const t = String(val).trim(), v = t ? parseTime(t) : null;
+    if (t && v == null) { toast('Temps illisible : écris par ex. 1:02.30'); renderRecap(); return; }
+    const a = cumuls(c, s); a[k] = v; s.cumuls = a;
+  } else if (f === 'oublie') {
+    const a = cumuls(c, s);
+    if (a[n - 1] != null) { toast('La dernière longueur a déjà un temps : supprime d\'abord un mur en trop', 3500); return; }
+    a.splice(k, 0, null); a.length = n; s.cumuls = a;
+  } else if (f === 'trop') { const a = cumuls(c, s); a.splice(k, 1); a.push(null); s.cumuls = a; }
+  else if (f === 'bruts') s.cumuls = null;
+  retouche();
+  if (f !== 'remarque') renderRecap();
+}
+
+// ---------- Démarrage ----------
+function render() {
+  fermerLayer();
+  if ((view === 'course' || view === 'recap') && !C) view = 'accueil';
+  if (view === 'course' && C.done) view = 'recap';
+  if (view === 'accueil') renderAccueil();
+  else if (view === 'course') renderCourse();
+  else renderRecap();
+}
+// Reprise après fermeture de l'app ou rechargement : la course partie revient, le chrono continue (le départ est une heure, pas un compteur).
+const enCoursAuLancement = DB.ouvertes.find(c => c.T0 != null);
+if (enCoursAuLancement) { C = enCoursAuLancement; view = 'course'; keepAwake(); }
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
+render();
+</script>
+<script>
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

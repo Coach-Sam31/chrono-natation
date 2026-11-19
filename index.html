@@ -1225,6 +1225,7 @@ function renderSetup() {
   $('#app').innerHTML = `
   <div class="view"><div class="scroll"><div class="panel">
     <h1>Chrono multi-nageurs</h1>
+    <div class="actions"><button class="btn big" id="compet" onclick="location.href='course.html'">🏁 Compétition</button></div>
     ${LIVE.length ? `<div class="actions"><button class="btn go big" id="resume">Au bassin · ${LIVE.length} série${LIVE.length > 1 ? 's' : ''} ouverte${LIVE.length > 1 ? 's' : ''}${enCours ? ` · ${enCours} en cours` : ''}</button></div>
       <p class="note">${LIVE.map(s => esc(nomSerie(s)) + (started(s) ? ' (en cours)' : ' (prête)')).join(' · ')}. Elles restent sur l'appareil tant que tu ne les as pas terminées ou retirées.</p>` : ''}
     ${secret && PLAN ? (() => {

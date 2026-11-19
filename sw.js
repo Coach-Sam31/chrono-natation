@@ -1,7 +1,7 @@
 // Garde l'app sur l'appareil pour qu'elle s'ouvre sans réseau au bord du bassin.
 // Changer VERSION à chaque mise à jour publiée : l'iPad récupère alors la nouvelle version.
-const VERSION = 'chrono-v16';
-const FICHIERS = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
+const VERSION = 'chrono-v17';
+const FICHIERS = ['./', 'index.html', 'course.html', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FICHIERS)).then(() => self.skipWaiting()));
