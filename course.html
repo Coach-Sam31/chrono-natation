@@ -125,6 +125,40 @@ h2 { font-family: var(--font-display); font-weight: 700; font-size: 24px; margin
 .cou.cbb.on { background: var(--cbq); color: var(--cbq-ink); }
 .cou:disabled { opacity: .3; }
 .grid.dense .cou { min-height: 44px; font-size: 18px; }
+/* Vue côté du bassin = une ligne d'eau par nageur (retour iPad du 20/11).
+   Plots de départ d'un côté (avec le bloc du nageur et son bouton CB), mur d'en face de l'autre.
+   Coulées posées à leur vraie distance du mur qu'il vient de quitter ; zone « mur » (split) entre 15 m et le mur d'arrivée.
+   À chaque virage, tout s'inverse. */
+.grid.cote .card { flex-direction: row; gap: 6px; }
+.grid.cote.plots-d .card { flex-direction: row-reverse; }
+.plot { flex: 0 0 clamp(92px, 15%, 170px); display: flex; flex-direction: column; justify-content: space-between; gap: 4px; min-width: 0;
+  background: var(--surface); border: 3px solid var(--ink); border-radius: 10px; padding: 6px 8px; box-sizing: border-box; container-type: size; overflow: hidden; }
+.plot .t-top { font-size: clamp(14px, min(22cqh, 15cqw), 30px); }
+.plot .t-top b { white-space: nowrap; }
+.plot .t-len { font-size: clamp(12px, min(17cqh, 12cqw), 24px); white-space: normal; line-height: 1.15; }
+.plot .cbb { min-height: 36px; flex: 1 1 auto; max-height: 64px; font-size: clamp(16px, 20cqh, 24px); }
+.eau { flex: 1; min-width: 0; position: relative; border-radius: 10px; overflow: hidden;
+  background: linear-gradient(to bottom, transparent calc(50% - 1px), var(--line) calc(50% - 1px), var(--line) calc(50% + 1px), transparent calc(50% + 1px)), var(--wait); }
+.eau .cou.flot { position: absolute; width: var(--bw, 52px); height: calc(50% - 6px); min-height: 0; padding: 0; z-index: 2; }
+.eau .cou.flot.ra { top: 4px; } .eau .cou.flot.rb { bottom: 4px; }
+.eau .tile { position: absolute; top: 0; bottom: 0; border-radius: 10px; z-index: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; padding: 4px 8px; text-align: center; }
+.eau .tile .t-split { font-size: clamp(20px, min(48cqh, 22cqw), 96px); }
+.eau .tile .t-cum, .eau .tile .t-run { font-size: clamp(11px, min(15cqh, 9cqw), 22px); max-width: 100%; }
+.eau .tile.fini, .eau .tile.ab { left: 0 !important; right: 0 !important; }
+.depart.vert { writing-mode: vertical-rl; transform: rotate(180deg); min-height: 0; flex: 0 0 clamp(64px, 9vw, 120px); font-size: clamp(30px, 5vw, 56px); }
+.grid.cote.plots-d + .depart.vert, .depart.vert.d { transform: none; }
+.zone { flex: 1; min-height: 0; display: flex; gap: 8px; }
+.zone.d { flex-direction: row-reverse; }
+.zone > .grid { flex: 1; min-width: 0; }
+.grid.cote.dense .plot { padding: 3px 6px; border-width: 2px; }
+.grid.cote.dense .plot { gap: 2px; } .grid.cote.dense .plot .cbb { min-height: 24px; font-size: 15px; } .grid.cote.dense .plot .t-len { font-size: clamp(11px, 13cqh, 16px); }
+.vues-plots { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.vues-plots .choix button { font-size: 18px; }
+.vues { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.vues button { border: 2px solid var(--line); background: var(--surface); border-radius: 12px; padding: 10px; min-height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-weight: 600; }
+.vues button.on { border: 3px solid var(--lane); background: var(--bg); }
+.vues .schema { display: grid; gap: 3px; width: 90px; height: 54px; }
+.vues .schema i { background: var(--lane); color: var(--lane-ink); border-radius: 3px; font-style: normal; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
 .grid.dense .tile { padding: 4px 6px; border-width: 3px; }
 .pad { border: 3px solid var(--cbq); background: var(--surface); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
 .pad-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -187,8 +221,8 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v17';
-const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { sens } } — à part des séries d'entraînement
+const APP_VERSION = 'v18';
+const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
 const NAGES = ['NL', 'Dos', 'Brasse', 'Pap', '4N'];
@@ -449,6 +483,8 @@ function renderAccueil() {
       const alerte = c.nageurs.some(s => { const e = ecart(c, s); return e != null && Math.abs(e) > 1; });
       return `<button class="hist-item" data-h="${k}"><b>${lign(c)}</b><span>${fmtDate(c.endedAt)}${alerte ? ' · <span class="warn">écart &gt; 1"</span>' : ''}</span></button>`;
     }).join('')}</div>` : '<p class="note">Les courses terminées arrivent ici ; tu peux les rouvrir et les corriger autant que tu veux.</p>'}
+    <h2>Réglages</h2>
+    <div class="actions"><button class="btn" id="f-vue">👁 Vue depuis ta place : ${vueCourte()}</button></div>
     <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étape C1 : rien n'est envoyé au Sheet).</p>
   </div></div></div>`;
   const info = () => {
@@ -465,6 +501,7 @@ function renderAccueil() {
   $('#app').querySelectorAll('.nrow [data-r]').forEach(el => el.oninput = el.onchange = () => { F.rows[+el.closest('.nrow').dataset.k][el.dataset.r] = el.value; });
   if ($('#f-plus')) $('#f-plus').onclick = () => { F.rows.push({ id: '', libre: '', couloir: '' }); renderAccueil(); };
   $('#f-creer').onclick = creerCourse;
+  $('#f-vue').onclick = ouvrirVue;
   $('#retour').onclick = () => { location.href = 'index.html'; };
   $('#app').querySelectorAll('[data-o]').forEach(b => b.onclick = () => { C = DB.ouvertes[+b.dataset.o]; view = 'course'; if (C.T0 != null) keepAwake(); render(); });
   $('#app').querySelectorAll('[data-del]').forEach(b => armed(b, 'Confirmer', () => { DB.ouvertes.splice(+b.dataset.del, 1); save(); render(); }));
@@ -495,10 +532,37 @@ function creerCourse() {
 }
 
 // ---------- Écran Course ----------
-const sens = () => DB.prefs.sens === 'd' ? 'd' : 'g';
+// Vue depuis ta place (retour test iPad du 20/11) : l'écran reproduit le bassin tel que tu le vois, pour toucher sans chercher.
+const VUES = [['cote-haut', 'Côté du bassin', 'couloir 1 en haut'], ['cote-bas', 'Côté du bassin', 'couloir 1 en bas'],
+  ['bout-gauche', 'Bout du bassin', 'couloir 1 à gauche'], ['bout-droite', 'Bout du bassin', 'couloir 1 à droite']];
+const vue = () => VUES.some(v => v[0] === DB.prefs.vue) ? DB.prefs.vue : DB.prefs.sens === 'd' ? 'bout-droite' : 'bout-gauche';
+const estCote = () => vue().startsWith('cote');
+const plots = () => DB.prefs.plots === 'd' ? 'd' : 'g';   // vue côté : plots de départ à gauche ou à droite de l'écran
+const vueCourte = () => ({ 'cote-haut': 'Côté · C1 en haut', 'cote-bas': 'Côté · C1 en bas', 'bout-gauche': 'Bout · C1 à gauche', 'bout-droite': 'Bout · C1 à droite' })[vue()]
+  + (estCote() ? ` · plots à ${plots() === 'd' ? 'droite' : 'gauche'}` : '');
 function ordreTuiles(c) {
   const o = c.nageurs.map((s, i) => i).sort((a, b) => c.nageurs[a].couloir - c.nageurs[b].couloir);
-  return sens() === 'd' ? o.reverse() : o;
+  return vue() === 'cote-bas' || vue() === 'bout-droite' ? o.reverse() : o;
+}
+function schemaVue(v) {
+  const n = ['1', '2', '3', '4'], o = v === 'cote-bas' || v === 'bout-droite' ? n.reverse() : n;
+  const cote = v.startsWith('cote');
+  return `<span class="schema" style="${cote ? 'grid-template-rows' : 'grid-template-columns'}:repeat(4,1fr)">${o.map(x => `<i>C${x}</i>`).join('')}</span>`;
+}
+function ouvrirVue() {
+  $('#layer').innerHTML = `<div class="overlay" id="ov"><div class="sheet">
+    <h2>Vue depuis ta place</h2>
+    <p class="note">Choisis où tu te tiens : les tuiles sont rangées comme les couloirs que tu as devant toi.</p>
+    <div class="vues">${VUES.map(([v, a, b]) => `<button data-v="${v}" class="${vue() === v ? 'on' : ''}">${schemaVue(v)}<span>${a}<br>${b}</span></button>`).join('')}</div>
+    <div class="vues-plots"><b>Vue côté : plots de départ</b><div class="choix">${[['g', 'à gauche'], ['d', 'à droite']].map(([p, t]) => `<button data-p="${p}" class="${plots() === p ? 'on' : ''}">${t}</button>`).join('')}</div></div>
+    <p class="note">Vue côté : chaque nageur a sa ligne d'eau. Les coulées sont posées à leur distance du mur qu'il vient de quitter ; touche la partie claire, côté arrivée, quand il touche le mur.</p>
+    <button class="btn" id="v-x">Fermer</button>
+  </div></div>`;
+  const appliquer = () => { save(); fermerLayer(); if (view === 'course') renderCourse(); else render(); };
+  $('#layer').querySelectorAll('.vues button').forEach(b => b.onclick = () => { DB.prefs.vue = b.dataset.v; appliquer(); });
+  $('#layer').querySelectorAll('.vues-plots button').forEach(b => b.onclick = () => { DB.prefs.plots = b.dataset.p; if (!estCote()) DB.prefs.vue = 'cote-haut'; appliquer(); });
+  $('#v-x').onclick = fermerLayer;
+  $('#ov').onclick = e => { if (e.target.id === 'ov') fermerLayer(); };
 }
 function renderCourse() {
   const c = C, part = c.T0 != null;
@@ -510,12 +574,14 @@ function renderCourse() {
         <div class="titre">${esc(nomCourse(c))}<small>${nbL(c)} longueurs</small></div>
         <div class="spacer"></div>
         <div class="clock" id="c-clock">${part ? '' : '0"0'}</div></div>
-      <div class="b2"><button class="btn" id="c-sens" aria-label="Changer le sens des couloirs">⇄<span class="long"> C1 à ${sens() === 'd' ? 'droite' : 'gauche'}</span></button>
+      <div class="b2"><button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
         ${part ? '<button class="btn" id="c-fin">Terminer</button>' : ''}
         <button class="btn undo" id="c-undo">↶ ANNULER</button></div>
     </div>
-    ${part ? '' : '<button class="depart" id="c-go">DÉPART<small>à taper au signal du starter</small></button>'}
-    <div class="grid${c.nageurs.length > 4 ? ' dense' : ''}" id="c-grid">${ordreTuiles(c).map(i => `
+    ${part || estCote() ? '' : '<button class="depart" id="c-go">DÉPART<small>à taper au signal du starter</small></button>'}
+    <div class="zone${estCote() && plots() === 'd' ? ' d' : ''}">
+    ${part || !estCote() ? '' : `<button class="depart vert${plots() === 'd' ? ' d' : ''}" id="c-go">DÉPART</button>`}
+    <div class="grid${c.nageurs.length > 4 ? ' dense' : ''}${estCote() ? ' cote' + (plots() === 'd' ? ' plots-d' : '') : ''}" id="c-grid">${ordreTuiles(c).map(i => estCote() ? carteLigne(c, i) : `
       <div class="card" data-i="${i}">
         <div class="tile" id="t-${i}">
           <div class="t-top"><span class="cl">C${c.nageurs[i].couloir}</span><b>${esc(prenom(c.nageurs[i]))}</b></div>
@@ -523,11 +589,11 @@ function renderCourse() {
         </div>
         <div class="strip">${COULEES.map(v => `<button class="cou" data-v="${v}">${coulTxt(v)}</button>`).join('')}<button class="cou cbb">CB</button></div>
       </div>`).join('')}
-    </div>
+    </div></div>
     <div class="pad" id="c-pad" hidden></div>
   </div>`;
   $('#c-home').onclick = () => { RT.pad = null; view = 'accueil'; render(); };
-  $('#c-sens').onclick = () => { DB.prefs.sens = sens() === 'd' ? 'g' : 'd'; save(); renderCourse(); };
+  $('#c-vue').onclick = ouvrirVue;
   bindPress($('#c-undo'), () => annuler());
   if ($('#c-fin')) $('#c-fin').onclick = ouvrirTerminer;
   if ($('#c-go')) bindPress($('#c-go'), t => depart(t));
@@ -539,13 +605,50 @@ function renderCourse() {
   });
   grille(); majCourse();
 }
+// Ligne d'eau (vue côté) : bloc « plot » (couloir, prénom, longueur, CB) + l'eau (coulées flottantes, zone mur)
+const RANG_A = ['-5', '+7', '+14'];   // rangée du haut ; +5 et +10 en bas : deux boutons voisins ne se touchent jamais
+const DIST = { '-5': 2.5, '+5': 5, '+7': 7, '+10': 10, '+14': 14 };
+function carteLigne(c, i) {
+  const s = c.nageurs[i];
+  return `
+      <div class="card ligne" data-i="${i}">
+        <div class="plot"><div class="t-top"><span class="cl">C${s.couloir}</span><b>${esc(prenom(s))}</b></div><div class="t-len"></div><button class="cou cbb">CB</button></div>
+        <div class="eau">${COULEES.map(v => `<button class="cou flot ${RANG_A.includes(v) ? 'ra' : 'rb'}" data-v="${v}">${coulTxt(v)}</button>`).join('')}
+          <div class="tile" id="t-${i}"><div class="t-split"></div><div class="t-cum"></div><div class="t-run"></div></div></div>
+      </div>`;
+}
+// Place les coulées depuis le mur que le nageur vient de quitter, et la zone mur entre 15 m et le mur d'arrivée.
+function placerLigne(card, c, s) {
+  const eau = card.querySelector('.eau'); if (!eau) return;
+  const W = eau.clientWidth, H = eau.clientHeight, m = W / c.bassin;
+  const bw = Math.max(40, Math.min(64, W * 0.07, (H / 2 - 6) * 1.6)), gap = 4;
+  eau.style.setProperty('--bw', bw + 'px');
+  const L = lEnCours(c, s);
+  const versPlots = L % 2 === 0;                             // longueurs paires : il revient vers les plots
+  const depGauche = (plots() === 'g') !== versPlots;          // il part du bord gauche de l'écran ?
+  let finCoulees = 0;
+  [RANG_A, COULEES.filter(v => !RANG_A.includes(v))].forEach(rang => {
+    let bord = 2;
+    rang.forEach(v => {
+      const centre = Math.max(DIST[v] * m, bord + bw / 2);
+      const g = centre - bw / 2; bord = g + bw + gap; finCoulees = Math.max(finCoulees, bord);
+      const b = card.querySelector(`.cou[data-v="${v}"]`);
+      b.style.left = (depGauche ? g : W - g - bw) + 'px';
+    });
+  });
+  const debutMur = Math.min(W - 60, Math.max(15 * m, finCoulees + 2));
+  const t = card.querySelector('.tile');
+  if (depGauche) { t.style.left = debutMur + 'px'; t.style.right = '0px'; } else { t.style.left = '0px'; t.style.right = debutMur + 'px'; }
+  return depGauche;
+}
 function grille() {
   const g = $('#c-grid'); if (!g) return;
   const n = C.nageurs.length, w = g.clientWidth || window.innerWidth;
-  let cols = Math.min(n, Math.max(1, Math.floor(w / 170)));
+  let cols = estCote() ? 1 : Math.min(n, Math.max(1, Math.floor(w / 170)));
   const rows = Math.ceil(n / cols); cols = Math.ceil(n / rows);
   g.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
   g.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+  if (estCote()) C.nageurs.forEach((s, i) => { const card = g.querySelector(`.card[data-i="${i}"]`); if (card) placerLigne(card, C, s); });
 }
 window.addEventListener('resize', () => { if (view === 'course') grille(); });
 function flash(i, cls) {
@@ -563,13 +666,14 @@ function majCourse() {
     const cum = cumuls(c, s), k = s.murs.length, sp = splits(cum);
     const ab = s.statut === 'abandon', f = fini(c, s);
     el.classList.toggle('fini', f && !ab); el.classList.toggle('ab', ab); el.classList.toggle('avant', c.T0 == null);
-    const L = lEnCours(c, s);
-    $('.t-len', el).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `L${L}/${n} · ${nageL(c, L)}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
+    const L = lEnCours(c, s), card = el.closest('.card');
+    const depGauche = estCote() ? placerLigne(card, c, s) : null;
+    const fleche = depGauche == null || f || ab ? '' : depGauche ? ' →' : ' ←';
+    $('.t-len', card).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `L${L}/${n} · ${nageL(c, L)}${fleche}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
     $('.t-split', el).textContent = k ? fmt(sp[k - 1]) : '—';
     $('.t-cum', el).textContent = k ? `${f ? 'final' : 'cumul'} ${fmt(cum[k - 1])}${s.cb[k] ? ' · CB ' + s.cb[k] : ''}` : (c.T0 == null ? 'attend le départ' : 'L1 en cours');
     $('.t-run', el).textContent = c.T0 == null ? '' : f ? '' : ab ? '' : fmt((now - c.T0) / 1000, 1);
-    const card = el.parentNode;
-    card.querySelectorAll('.cou[data-v]').forEach(b => { b.classList.toggle('on', !f && s.coulees[L] === b.dataset.v); b.disabled = !enCourse(c, s) || c.done; });
+    card.querySelectorAll('.cou[data-v]').forEach(b => { b.classList.toggle('on', !f && s.coulees[L] === b.dataset.v); b.disabled = !enCourse(c, s) || c.done; if (estCote()) b.hidden = !enCourse(c, s); });
     const cbb = card.querySelector('.cbb'); cbb.classList.toggle('on', !!RT.pad && RT.pad.i === i); cbb.disabled = c.done;
   });
   const u = $('#c-undo'); if (u) u.disabled = !c.undo.length && !peutRouvrir(c);
