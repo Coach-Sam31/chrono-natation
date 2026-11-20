@@ -221,7 +221,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -432,7 +432,70 @@ function finir(auto) {
     setTimeout(() => { if (C === c && c.done && view === 'course') { view = 'recap'; render(); } }, 1200);
   } else { view = 'recap'; render(); }
 }
-const peutRouvrir = c => c.done && !c.retouche && c.undo.length && Date.now() - (c.endedAt || 0) < ROUVRIR_MS;
+const peutRouvrir = c => c.done && !c.retouche && !c.validee && !c.sentAt && c.undo.length && Date.now() - (c.endedAt || 0) < ROUVRIR_MS;
+
+// ---------- Lien avec le Google Sheet (C2) : onglet Competition, une ligne par longueur et par nageur ----------
+// Même script et même code secret que l'entraînement (code saisi une fois sur l'appareil, écran Entraînement).
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzYb6vBHxEX3fqJYsXS-O1LqGJdQ5pi4gbaZvVz83nR57c6B7zoIBus3Uf--8si9rnlEw/exec';
+const KEY_SECRET = 'chrono-secret';    // lecture seule
+async function callSheet(body) {
+  const secret = getLS(KEY_SECRET);
+  if (!secret) throw new Error('Code secret absent : saisis-le une fois dans l\'écran Entraînement');
+  let rep;
+  try { rep = await fetch(SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({}, body, { secret })) }); }
+  catch (e) { throw new Error('Pas de réseau : envoi dès le retour du wifi'); }
+  let data; try { data = await rep.json(); } catch (e) { throw new Error('Réponse du Sheet illisible'); }
+  if (!data.ok) throw new Error(data.erreur || 'Réponse du Sheet inattendue');
+  return data;
+}
+function appareil() { const ua = navigator.userAgent; return /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'iPad' : /iPhone/.test(ua) ? 'iPhone' : 'autre'; }
+const r2 = v => v == null ? '' : Math.round(v * 100) / 100;
+// split_s et cumul_s = mesurés (taps, ou corrigés dans le récap) ; cumul_recale_s = calé sur le temps officiel (vide sans officiel).
+function lignesCourse(c) {
+  const d = new Date(c.T0 || c.createdAt), date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const idCourse = c.idCourse || 'M-' + c.uid, n = nbL(c), rows = [];
+  c.nageurs.forEach(s => {
+    const cum = cumuls(c, s), sp = splits(cum), e = ecart(c, s), rec = cumulsRecales(c, s);
+    for (let k = 0; k < n; k++) rows.push({
+      date, id_compet: c.idCompet || '', competition: c.competition || '', id_course: idCourse, num_epreuve: c.numEpreuve || '',
+      distance: c.distance, nage: c.nage, bassin_m: c.bassin, serie: c.serie || '', couloir: s.couloir,
+      id_nageur: s.id_nageur || '', nom: s.nom, prenom: s.prenom, longueur: k + 1, nage_longueur: nageL(c, k + 1),
+      split_s: r2(sp[k]), cumul_s: r2(cum[k]), cumul_recale_s: e != null ? r2(rec[k]) : '',
+      coulee: s.coulees[k + 1] || '', coups_bras: s.cb[k + 1] || '',
+      temps_officiel_s: s.officiel ?? '', decalage_s: e != null ? r2(e) : '',
+      statut: s.statut || (cum[k] == null ? 'manque' : 'ok'), remarque: s.remarque || '', appareil: appareil()
+    });
+  });
+  return rows;
+}
+// Comme l'entraînement (v12) : rien ne part sans « Valider » ; validée, elle part dès qu'il y a du réseau ; corrigée ensuite, elle redevient « à valider ».
+const aValider = () => DB.hist.filter(c => !c.validee && !c.sentAt);
+const aEnvoyer = () => DB.hist.filter(c => c.validee && !c.sentAt);
+const etatExport = c => c.sentAt ? 'envoyée ✓' : c.validee ? 'validée · envoi en attente' : 'à valider';
+async function envoyerCourses(liste) {
+  let n = 0;
+  for (const c of liste) {
+    await callSheet({ action: 'envoyer_course', lignes: lignesCourse(c) });
+    c.idCourse = c.idCourse || 'M-' + c.uid; c.sentAt = Date.now(); n++; save();
+  }
+  return n;
+}
+async function validerCourses(liste) {
+  liste.forEach(c => { c.validee = Date.now(); }); save();
+  if (navigator.onLine === false) return { n: liste.length, envoyees: 0, erreur: 'Pas de réseau : envoi dès le retour du wifi' };
+  try { return { n: liste.length, envoyees: await envoyerCourses(aEnvoyer()) }; }
+  catch (e) { return { n: liste.length, envoyees: 0, erreur: e.message }; }
+}
+const msgValide = r => `✓ ${r.n} course${r.n > 1 ? 's' : ''} validée${r.n > 1 ? 's' : ''}` + (r.erreur ? ` · ${r.erreur}` : r.envoyees ? ' et envoyée' + (r.envoyees > 1 ? 's' : '') + ' au Sheet' : '');
+let envoiEnCours = false;
+async function autoEnvoi() {
+  if (envoiEnCours || !getLS(KEY_SECRET) || navigator.onLine === false || !aEnvoyer().length) return;
+  envoiEnCours = true;
+  try { const n = await envoyerCourses(aEnvoyer()); if (n) { toast(`✓ ${n} course${n > 1 ? 's' : ''} envoyée${n > 1 ? 's' : ''} au Sheet`); if (view !== 'course') render(); } }
+  catch (e) { /* pas de réseau ou Sheet injoignable : on réessaiera au prochain déclencheur */ }
+  envoiEnCours = false;
+}
+window.addEventListener('online', autoEnvoi);
 function rouvrir(c) {
   c.done = false; delete c.endedAt; delete c.finAuto;
   DB.hist = DB.hist.filter(x => x !== c); DB.ouvertes.unshift(c);
@@ -441,7 +504,7 @@ function rouvrir(c) {
 
 // ---------- Accueil ----------
 function formDefaut() {
-  return { distance: 100, nage: 'NL', bassin: 25, serie: '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
+  return { distance: 100, nage: 'NL', bassin: 25, serie: '', competition: DB.prefs.competition || '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
 }
 function optionsNageurs(sel) {
   const par = {};
@@ -466,6 +529,7 @@ function renderAccueil() {
     <div class="form">
       <div class="field"><span class="lbl">Bassin</span><div class="choix" id="f-bassin">${[25, 50].map(b => `<button data-v="${b}" class="${F.bassin === b ? 'on' : ''}">${b} m</button>`).join('')}</div></div>
       <div class="field"><label for="f-serie">Série</label><input id="f-serie" type="text" value="${esc(F.serie)}" placeholder="ex. 3"></div>
+      <div class="field"><label for="f-compet">Compétition (facultatif)</label><input id="f-compet" type="text" value="${esc(F.competition)}" placeholder="ex. Interclubs Montauban"></div>
     </div>
     <p class="note" id="f-info"></p>
     <div class="field"><span class="lbl">Nageurs suivis (1 à 4, jusqu'à 8) et couloir</span>
@@ -478,14 +542,20 @@ function renderAccueil() {
     ${NAGEURS.length ? '' : '<p class="note">Aucun nageur chargé sur cet appareil (ils se chargent depuis l\'écran Entraînement, avec du réseau) : écris les noms.</p>'}
     <div class="actions">${F.rows.length < 8 ? '<button class="btn" id="f-plus">+ Nageur</button>' : ''}
       <button class="btn go big" id="f-creer">Créer la course</button></div>
+    ${(() => { const av = aValider(), ae = aEnvoyer(); return (av.length ? `<h2>À valider avant l'export (${av.length})</h2>
+      <p class="note">Rien n'est parti au Sheet. Ouvre une course pour vérifier les splits, taper le temps officiel, corriger, puis valide-la depuis son récap, ou toutes d'un coup.</p>
+      <div class="hist">${av.map(c => `<button class="hist-item live" data-h="${DB.hist.indexOf(c)}"><b>${lign(c)}</b><span>${fmtDate(c.endedAt)}${c.nageurs.some(s => s.officiel == null && statut(c, s) === 'ok') ? ' · temps officiel à taper' : ''}</span></button>`).join('')}</div>
+      <div class="actions"><button class="btn go big" id="valid-all">✓ Tout valider et envoyer (${av.length})</button></div>` : '')
+      + (ae.length ? `<div class="actions"><button class="btn big" id="send-all">Envoyer au Sheet (${ae.length} validée${ae.length > 1 ? 's' : ''} en attente)</button></div>` : '')
+      + (getLS(KEY_SECRET) ? '' : '<p class="note warn">Code secret du Sheet absent sur cet appareil : saisis-le une fois dans l\'écran Entraînement pour pouvoir envoyer les courses.</p>'); })()}
     <h2>Historique</h2>
     ${DB.hist.length ? `<div class="hist">${DB.hist.map((c, k) => {
       const alerte = c.nageurs.some(s => { const e = ecart(c, s); return e != null && Math.abs(e) > 1; });
-      return `<button class="hist-item" data-h="${k}"><b>${lign(c)}</b><span>${fmtDate(c.endedAt)}${alerte ? ' · <span class="warn">écart &gt; 1"</span>' : ''}</span></button>`;
+      return `<button class="hist-item" data-h="${k}"><b>${lign(c)}</b><span>${fmtDate(c.endedAt)} · ${etatExport(c)}${alerte ? ' · <span class="warn">écart &gt; 1"</span>' : ''}</span></button>`;
     }).join('')}</div>` : '<p class="note">Les courses terminées arrivent ici ; tu peux les rouvrir et les corriger autant que tu veux.</p>'}
     <h2>Réglages</h2>
     <div class="actions"><button class="btn" id="f-vue">👁 Vue depuis ta place : ${vueCourte()}</button></div>
-    <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étape C1 : rien n'est envoyé au Sheet).</p>
+    <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étapes C1-C2 : courses envoyées au Sheet après validation).</p>
   </div></div></div>`;
   const info = () => {
     const n = F.distance / F.bassin;
@@ -498,6 +568,9 @@ function renderAccueil() {
   });
   choix('f-nage', 'nage'); choix('f-dist', 'distance', true); choix('f-bassin', 'bassin', true);
   $('#f-serie').oninput = e => F.serie = e.target.value;
+  $('#f-compet').oninput = e => F.competition = e.target.value;
+  if ($('#valid-all')) armed($('#valid-all'), `Confirmer : valider et envoyer ${aValider().length} course${aValider().length > 1 ? 's' : ''}`, async () => { const r = await validerCourses(aValider()); toast(msgValide(r), 4000); render(); });
+  if ($('#send-all')) $('#send-all').onclick = async () => { try { const n = await envoyerCourses(aEnvoyer()); toast(`✓ ${n} course${n > 1 ? 's' : ''} envoyée${n > 1 ? 's' : ''} au Sheet`); } catch (e) { toast(e.message, 4000); } render(); };
   $('#app').querySelectorAll('.nrow [data-r]').forEach(el => el.oninput = el.onchange = () => { F.rows[+el.closest('.nrow').dataset.k][el.dataset.r] = el.value; });
   if ($('#f-plus')) $('#f-plus').onclick = () => { F.rows.push({ id: '', libre: '', couloir: '' }); renderAccueil(); };
   $('#f-creer').onclick = creerCourse;
@@ -525,7 +598,8 @@ function creerCourse() {
   const cl = nageurs.map(s => s.couloir);
   if (new Set(cl).size !== cl.length) { toast('Deux nageurs dans le même couloir'); return; }
   const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: F.distance, nage: F.nage, bassin: F.bassin,
-    serie: F.serie.trim(), nageurs, T0: null, undo: [], done: false };
+    serie: F.serie.trim(), competition: F.competition.trim(), nageurs, T0: null, undo: [], done: false };
+  DB.prefs.competition = c.competition;
   DB.ouvertes.unshift(c); save();
   RT.form = Object.assign(formDefaut(), { distance: F.distance, nage: F.nage, bassin: F.bassin });
   C = c; view = 'course'; render();
@@ -754,10 +828,17 @@ function renderRecap() {
       ${peutRouvrir(c) ? `<button class="btn" id="r-rouvrir">↶ Annuler le dernier geste (rouvre la course)</button>` : ''}</div>
     <h1>${esc(nomCourse(c))}</h1>
     <p class="note">${c.endedAt ? 'Terminée le ' + fmtDate(c.endedAt) : ''} · ${n} longueurs. Corrige un temps de passage (cumul) si un mur a été mal tapé : le split se recalcule. Les taps d'origine restent gardés.</p>
-    <div class="form"><div class="field"><label for="r-serie">Série</label><input id="r-serie" type="text" value="${esc(c.serie || '')}"></div></div>
+    <div class="form"><div class="field"><label for="r-serie">Série</label><input id="r-serie" type="text" value="${esc(c.serie || '')}"></div>
+      <div class="field"><label for="r-compet">Compétition</label><input id="r-compet" type="text" value="${esc(c.competition || '')}"></div></div>
+    <div class="actions">${c.sentAt ? `<span class="note">Envoyée au Sheet le ${fmtDate(c.sentAt)}. Une correction la fera repasser « à valider ».</span>`
+      : c.validee ? `<span class="note">Validée · elle part au Sheet dès qu'il y a du réseau.</span><button class="btn" id="r-envoi">Envoyer maintenant</button>`
+      : `<button class="btn go big" id="r-valider">✓ Valider et envoyer</button><span class="note"><b>Pas encore validée</b> : corrige ce que tu veux, autant de fois que nécessaire. Rien ne part au Sheet avant « Valider ».</span>`}</div>
     ${c.nageurs.map((s, i) => blocNageur(c, s, i)).join('')}
   </div></div></div>`;
-  $('#r-home').onclick = () => { view = 'accueil'; render(); };
+  $('#r-home').onclick = () => { view = 'accueil'; render(); autoEnvoi(); };
+  $('#r-compet').onchange = e => { c.competition = e.target.value.trim(); retouche(); };
+  if ($('#r-valider')) $('#r-valider').onclick = async () => { const r = await validerCourses([c]); toast(msgValide(r), 4000); if (view === 'recap' && C === c) renderRecap(); };
+  if ($('#r-envoi')) $('#r-envoi').onclick = async () => { try { await envoyerCourses([c]); toast('✓ Course envoyée au Sheet'); } catch (e) { toast(e.message, 4000); } if (view === 'recap' && C === c) renderRecap(); };
   if ($('#r-rouvrir')) $('#r-rouvrir').onclick = () => { rouvrir(c); annuler(); };
   $('#r-serie').onchange = e => { c.serie = e.target.value.trim(); retouche(); };
   $('#app').querySelectorAll('[data-f]').forEach(el => {
@@ -795,7 +876,8 @@ function blocNageur(c, s, i) {
     <div class="field"><label for="rq-${i}">Remarque</label><textarea id="rq-${i}" data-f="remarque" data-i="${i}">${esc(s.remarque || '')}</textarea></div>
   </section>`;
 }
-function retouche() { C.retouche = true; save(); }
+// Toute correction d'une course validée ou envoyée la remet « à valider » (le renvoi remplacera ses lignes dans le Sheet).
+function retouche() { C.retouche = true; delete C.validee; delete C.sentAt; save(); }
 function editRecap(f, i, k, val, el) {
   const c = C, s = c.nageurs[i], n = nbL(c);
   if (f === 'statut') s.statut = val || null;
@@ -831,6 +913,7 @@ const enCoursAuLancement = DB.ouvertes.find(c => c.T0 != null);
 if (enCoursAuLancement) { C = enCoursAuLancement; view = 'course'; keepAwake(); }
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
 render();
+autoEnvoi();
 </script>
 <script>
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
