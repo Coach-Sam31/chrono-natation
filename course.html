@@ -78,6 +78,15 @@ h2 { font-family: var(--font-display); font-weight: 700; font-size: 24px; margin
 .hist-item span { color: var(--muted); font-size: 14px; }
 .hist-item.live { border-color: var(--lane); border-width: 3px; }
 .warn { color: var(--warn); font-weight: 700; }
+/* Programme (C3a) */
+h3.jour { font-family: var(--font-display); font-weight: 700; font-size: 20px; margin: 8px 0 0; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.hist-item.prog .h { font-family: var(--font-display); font-size: 22px; margin-right: 4px; font-variant-numeric: tabular-nums; }
+.hist-item.prog > span { flex-basis: 100%; }
+.hist-item.fait { opacity: .6; }
+.next { color: var(--lane); font-weight: 700; }
+details.nons { border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+details.nons summary { font-weight: 600; min-height: 32px; cursor: pointer; }
+details.nons[open] summary { margin-bottom: 10px; }
 
 /* Écran Course : bandeau, gros Départ, une tuile par nageur rangée par couloir, pavé CB docké en bas */
 .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -221,7 +230,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -337,7 +346,7 @@ const rappelCB = n => n === 'NL' || n === 'Dos' ? 'chaque bras' : 'le cycle';
 const prenom = s => s.prenom || s.nom;
 const nomComplet = s => s.prenom ? `${s.prenom} ${s.nom}` : s.nom;
 const coulTxt = v => v == null ? '' : String(v).replace('-', '−');
-function nomCourse(c) { return `${c.distance} ${c.nage} · ${c.bassin} m${c.serie ? ' · série ' + c.serie : ''}`; }
+function nomCourse(c) { return `${c.distance} ${c.nage}${c.sexe ? ' ' + (SEXE[c.sexe] || '') : ''}${c.tour && c.tour !== 'Séries' ? ' · ' + c.tour : ''} · ${c.bassin} m${c.serie ? ' · série ' + c.serie : ''}`; }
 const fini = (c, s) => s.murs.length >= nbL(c);
 const enCourse = (c, s) => !fini(c, s) && s.statut !== 'abandon';
 const toutFini = c => c.nageurs.every(s => !enCourse(c, s));
@@ -502,6 +511,107 @@ function rouvrir(c) {
   save(); C = c; view = 'course'; keepAwake(); renderCourse();
 }
 
+// ---------- Programme de compétition (C3a) : engagements du club lus sur liveFFN par le script du Sheet ----------
+// DB.prog = { lien, id_compet, competition, lieu, dates, bassin, chargeLe, lignes: [une ligne par engagement] }
+// Une course du programme = épreuve + tour + série ; elle ne garde que les nageurs suivis (tes groupes), rangés par couloir.
+const SEXE = { F: 'D', M: 'M', X: 'mixte' };
+const keyCourse = l => [l.id_compet, l.num_epreuve ? 'E' + l.num_epreuve : `${l.distance}${l.nage}${l.sexe}`, l.tour && l.tour !== 'Séries' ? l.tour.replace(/\s+/g, '') : '', 'S' + l.serie].filter(Boolean).join('-');
+const keyChoix = l => [l.nageur_liveffn, l.distance, l.nage, l.sexe, l.tour].join('|');   // garde « suivre » d'un chargement à l'autre
+function coursesProgramme() {
+  const P = DB.prog; if (!P) return [];
+  const par = {};
+  P.lignes.forEach(l => { const k = keyCourse(l); (par[k] = par[k] || { id: k, lignes: [] }).lignes.push(l); });
+  return Object.values(par).map(g => {
+    const l = g.lignes[0];
+    return Object.assign(g, { date: l.date, heure: l.heure, jour: l.jour, distance: Number(l.distance), nage: l.nage, sexe: l.sexe, tour: l.tour,
+      serie: String(l.serie), num_epreuve: l.num_epreuve, suivis: g.lignes.filter(x => x.suivi).sort((a, b) => a.couloir - b.couloir) });
+  }).sort((a, b) => (a.date + a.heure).localeCompare(b.date + b.heure) || a.serie - b.serie);
+}
+const courseDe = id => DB.ouvertes.find(c => c.idCourse === id) || DB.hist.find(c => c.idCourse === id) || null;
+function etatProg(g) {
+  const c = courseDe(g.id);
+  if (!c) return { t: 'à venir', fait: false };
+  if (!c.done) return { t: c.T0 != null ? 'en cours' : 'prête', fait: false, c };
+  return { t: etatExport(c), fait: true, c };
+}
+const nomEpreuve = g => `${g.distance} ${g.nage} ${SEXE[g.sexe] || ''}`.trim() + (g.tour && g.tour !== 'Séries' ? ' · ' + g.tour : '');
+async function chargerProgramme(lien) {
+  lien = String(lien || '').trim();
+  if (!lien) { toast('Colle le lien liveFFN de la compétition (ou son numéro)'); return; }
+  if (navigator.onLine === false) { toast('Pas de réseau : le programme se charge avec du wifi ou la 4G', 4000); return; }
+  toast('Lecture de liveFFN par le Sheet…', 15000);
+  let r;
+  try { r = await callSheet({ action: 'liveffn', lien }); }
+  catch (e) { toast(e.message, 5000); return; }
+  const avant = DB.prog && String(DB.prog.id_compet) === String(r.id_compet) ? DB.prog : null;
+  const choix = {};
+  if (avant) avant.lignes.forEach(l => { if (l.suiviMain) choix[keyChoix(l)] = l.suivi; });
+  const lignes = r.courses.map(l => {
+    const x = Object.assign({}, l, { serie: String(l.serie), couloir: Number(l.couloir), engagement_s: l.engagement_s === '' ? null : Number(l.engagement_s), suivi: l.suivi === true || String(l.suivi).toUpperCase() === 'TRUE' });
+    if (keyChoix(x) in choix) { x.suivi = choix[keyChoix(x)]; x.suiviMain = true; }
+    return x;
+  });
+  DB.prog = { lien, id_compet: String(r.id_compet), competition: r.competition, lieu: r.lieu, dates: r.dates, bassin: Number(r.bassin_m) || 25, chargeLe: Date.now(), lignes };
+  DB.prefs.competition = r.competition; save();
+  toast(`✓ ${r.competition} : ${lignes.length} engagements du club, ${lignes.filter(l => l.suivi).length} suivis`, 4000);
+  if (view === 'accueil') render();
+}
+// Toucher une course du programme : elle se prépare (nageurs suivis, couloirs, engagement) et s'ouvre, prête pour le DÉPART.
+// Déjà préparée ou nagée : on la rouvre telle quelle (jamais recréée).
+function ouvrirProgramme(id) {
+  const g = coursesProgramme().find(x => x.id === id); if (!g) return;
+  const deja = courseDe(id);
+  if (deja) { C = deja; view = deja.done ? 'recap' : 'course'; if (!deja.done && deja.T0 != null) keepAwake(); render(); return; }
+  if (!g.suivis.length) { toast('Aucun nageur suivi dans cette série'); return; }
+  const P = DB.prog, n = g.distance / P.bassin;
+  if (!Number.isInteger(n) || (g.nage === '4N' && n % 4)) { toast('Distance impossible dans ce bassin'); return; }
+  const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: g.distance, nage: g.nage, bassin: P.bassin,
+    serie: g.serie, competition: P.competition, idCompet: P.id_compet, idCourse: id, numEpreuve: g.num_epreuve || '', sexe: g.sexe, tour: g.tour, heure: g.heure, jour: g.jour,
+    nageurs: g.suivis.map(l => ({ id_nageur: String(l.id_nageur || ''), nom: String(l.nom || ''), prenom: String(l.prenom || l.nageur || ''), couloir: Number(l.couloir), engagement: l.engagement_s,
+      murs: [], coulees: {}, cb: {}, statut: null, remarque: '', officiel: null, cumuls: null })),
+    T0: null, undo: [], done: false };
+  DB.ouvertes.unshift(c); save();
+  C = c; view = 'course'; render();
+}
+function blocProgramme() {
+  const P = DB.prog;
+  const champ = `<div class="form"><div class="field" style="grid-column:1/-1"><label for="p-lien">Lien liveFFN de la compétition (ou son n°)</label>
+      <input id="p-lien" type="url" value="${esc(P ? P.lien : '')}" placeholder="https://www.liveffn.com/cgi-bin/index.php?competition=…"></div></div>`;
+  if (!P) return `<h2>Programme</h2>
+    <p class="note">La veille ou sur place, avec du réseau : le Sheet lit la liste de départ du club sur liveFFN. Tes nageurs sont reconnus et suivis ; toucher une course la prépare avec ses couloirs.</p>
+    ${champ}<div class="actions"><button class="btn go big" id="p-charger">Charger depuis liveFFN</button></div>`;
+  const G = coursesProgramme(), avecSuivis = G.filter(g => g.suivis.length);
+  // Prochaine = la 1re pas encore nagée dont l'heure n'est pas passée de plus de 15 min (une course sautée ne bloque pas la liste).
+  const d = new Date(Date.now() - 15 * 60000), pad = x => String(x).padStart(2, '0');
+  const seuil = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const restantes = avecSuivis.filter(g => !etatProg(g).fait);
+  const prochaine = restantes.find(g => !g.date || `${g.date} ${g.heure}` >= seuil) || restantes[restantes.length - 1];
+  const nonSuivis = P.lignes.filter(l => !l.suivi);
+  let jour = '';
+  return `<h2>Programme · ${esc(P.competition)}</h2>
+    ${prochaine ? `<button class="btn go big" data-p="${esc(prochaine.id)}">▶ Prochaine : ${esc(prochaine.heure || '')} ${esc(nomEpreuve(prochaine))} · série ${esc(prochaine.serie)}<small style="display:block;font-family:var(--font-body);font-size:15px;letter-spacing:0;text-transform:none">${prochaine.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}`).join(' · ')}</small></button>` : ''}
+    <p class="note">${esc(P.lieu || '')} · ${esc(P.dates || '')} · bassin ${P.bassin} m · ${P.lignes.length} engagements du club, ${P.lignes.filter(l => l.suivi).length} suivis · chargé le ${fmtDate(P.chargeLe)}</p>
+    <div class="hist">${avecSuivis.map(g => {
+      const e = etatProg(g), titreJour = g.jour !== jour ? `<h3 class="jour">${esc(g.jour || '')}</h3>` : ''; jour = g.jour;
+      return `${titreJour}<button class="hist-item prog${g === prochaine ? ' live' : ''}${e.fait ? ' fait' : ''}" data-p="${esc(g.id)}">
+        <b><span class="h">${esc(g.heure || '')}</span> ${esc(nomEpreuve(g))} · série ${esc(g.serie)}${g === prochaine ? ' · <span class="next">▶ prochaine</span>' : ''}</b>
+        <span>${g.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}${l.engagement_s ? ' ' + fmt(l.engagement_s) : ''}`).join(' · ')} — ${e.t}</span></button>`;
+    }).join('')}</div>
+    ${avecSuivis.length ? '' : '<p class="note warn">Aucun de tes nageurs reconnu : suis-les ci-dessous.</p>'}
+    ${nonSuivis.length ? `<details class="nons"><summary>Autres nageurs du club, non suivis (${nonSuivis.length}) : touche pour suivre</summary>
+      <div class="hist">${nonSuivis.map(l => `<button class="hist-item" data-suivre="${P.lignes.indexOf(l)}"><b>+ ${esc(l.nageur)}</b><span>${esc(l.heure || '')} ${esc(nomEpreuve(l))} · série ${esc(l.serie)} · C${l.couloir}</span></button>`).join('')}</div></details>` : ''}
+    <details class="nons"><summary>Mettre à jour ou changer de compétition</summary>${champ}
+      <div class="actions"><button class="btn" id="p-charger">Charger depuis liveFFN</button></div>
+      <p class="note">Recharger ne touche jamais une course déjà préparée ou nagée.</p></details>`;
+}
+function lierProgramme() {
+  if ($('#p-charger')) $('#p-charger').onclick = () => chargerProgramme($('#p-lien').value);
+  $('#app').querySelectorAll('[data-p]').forEach(b => b.onclick = () => ouvrirProgramme(b.dataset.p));
+  $('#app').querySelectorAll('[data-suivre]').forEach(b => b.onclick = () => {
+    const l = DB.prog.lignes[+b.dataset.suivre]; l.suivi = true; l.suiviMain = true; save(); toast(`${l.nageur} suivi`); render();
+  });
+}
+
 // ---------- Accueil ----------
 function formDefaut() {
   return { distance: 100, nage: 'NL', bassin: 25, serie: '', competition: DB.prefs.competition || '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
@@ -523,7 +633,8 @@ function renderAccueil() {
     ${DB.ouvertes.length ? `<h2>Course ouverte</h2><div class="hist">${DB.ouvertes.map((c, k) => `
       <div class="hist-row"><button class="hist-item live" data-o="${k}"><b>${c.T0 != null ? '▶ Reprendre' : 'Ouvrir'} · ${lign(c)}</b><span>${c.T0 != null ? 'en cours' : 'pas encore partie'}</span></button>
       ${c.T0 == null ? `<button class="btn danger" data-del="${k}">Supprimer</button>` : ''}</div>`).join('')}</div>` : ''}
-    <h2>Nouvelle course</h2>
+    ${blocProgramme()}
+    <h2>Nouvelle course${DB.prog ? ' à la main' : ''}</h2>
     <div class="field"><span class="lbl">Nage</span><div class="choix" id="f-nage">${NAGES.map(n => `<button data-v="${n}" class="${F.nage === n ? 'on' : ''}">${n}</button>`).join('')}</div></div>
     <div class="field"><span class="lbl">Distance</span><div class="choix" id="f-dist">${DISTANCES.map(d => `<button data-v="${d}" class="${F.distance === d ? 'on' : ''}">${d}</button>`).join('')}</div></div>
     <div class="form">
@@ -555,7 +666,7 @@ function renderAccueil() {
     }).join('')}</div>` : '<p class="note">Les courses terminées arrivent ici ; tu peux les rouvrir et les corriger autant que tu veux.</p>'}
     <h2>Réglages</h2>
     <div class="actions"><button class="btn" id="f-vue">👁 Vue depuis ta place : ${vueCourte()}</button></div>
-    <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étapes C1-C2 : courses envoyées au Sheet après validation).</p>
+    <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étapes C1 à C3a : programme liveFFN, courses envoyées au Sheet après validation).</p>
   </div></div></div>`;
   const info = () => {
     const n = F.distance / F.bassin;
@@ -575,6 +686,7 @@ function renderAccueil() {
   if ($('#f-plus')) $('#f-plus').onclick = () => { F.rows.push({ id: '', libre: '', couloir: '' }); renderAccueil(); };
   $('#f-creer').onclick = creerCourse;
   $('#f-vue').onclick = ouvrirVue;
+  lierProgramme();
   $('#retour').onclick = () => { location.href = 'index.html'; };
   $('#app').querySelectorAll('[data-o]').forEach(b => b.onclick = () => { C = DB.ouvertes[+b.dataset.o]; view = 'course'; if (C.T0 != null) keepAwake(); render(); });
   $('#app').querySelectorAll('[data-del]').forEach(b => armed(b, 'Confirmer', () => { DB.ouvertes.splice(+b.dataset.del, 1); save(); render(); }));
@@ -745,7 +857,7 @@ function majCourse() {
     const fleche = depGauche == null || f || ab ? '' : depGauche ? ' →' : ' ←';
     $('.t-len', card).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `L${L}/${n} · ${nageL(c, L)}${fleche}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
     $('.t-split', el).textContent = k ? fmt(sp[k - 1]) : '—';
-    $('.t-cum', el).textContent = k ? `${f ? 'final' : 'cumul'} ${fmt(cum[k - 1])}${s.cb[k] ? ' · CB ' + s.cb[k] : ''}` : (c.T0 == null ? 'attend le départ' : 'L1 en cours');
+    $('.t-cum', el).textContent = k ? `${f ? 'final' : 'cumul'} ${fmt(cum[k - 1])}${s.cb[k] ? ' · CB ' + s.cb[k] : ''}` : (c.T0 == null ? (s.engagement ? 'engagé ' + fmt(s.engagement) : 'attend le départ') : 'L1 en cours');
     $('.t-run', el).textContent = c.T0 == null ? '' : f ? '' : ab ? '' : fmt((now - c.T0) / 1000, 1);
     card.querySelectorAll('.cou[data-v]').forEach(b => { b.classList.toggle('on', !f && s.coulees[L] === b.dataset.v); b.disabled = !enCourse(c, s) || c.done; if (estCote()) b.hidden = !enCourse(c, s); });
     const cbb = card.querySelector('.cbb'); cbb.classList.toggle('on', !!RT.pad && RT.pad.i === i); cbb.disabled = c.done;
@@ -854,6 +966,7 @@ function blocNageur(c, s, i) {
       <select data-f="statut" data-i="${i}" aria-label="Statut">${[['', `auto : ${statutAuto(c, s)}`], ['abandon', 'abandon'], ['dsq', 'dsq'], ['forfait', 'forfait']].map(([v, t]) => `<option value="${v}" ${(s.statut || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <span class="note">statut : <b>${st}</b></span></div>
     <div class="form">
+      ${s.engagement ? `<div class="field"><label>Engagement</label><div class="num" style="font-size:22px;font-weight:700;min-height:48px;display:flex;align-items:center">${fmt(s.engagement)}</div></div>` : ''}
       <div class="field"><label>Temps final mesuré</label><div class="num" style="font-size:22px;font-weight:700;min-height:48px;display:flex;align-items:center">${final != null ? fmt(final) : '—'}</div></div>
       <div class="field"><label for="off-${i}">Temps officiel</label><input id="off-${i}" data-f="officiel" data-i="${i}" type="text" inputmode="decimal" placeholder="1:05.12" value="${s.officiel != null ? fmtEdit(s.officiel) : ''}"></div>
       <div class="field"><label>Écart (officiel − mesuré)</label><div class="num" style="font-size:22px;font-weight:700;min-height:48px;display:flex;align-items:center">${e != null ? fmtEcart(e) : '—'}</div></div>
