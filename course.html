@@ -230,7 +230,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v22';
+const APP_VERSION = 'v23';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -944,7 +944,8 @@ function renderRecap() {
       <div class="field"><label for="r-compet">Compétition</label><input id="r-compet" type="text" value="${esc(c.competition || '')}"></div></div>
     <div class="actions">${c.sentAt ? `<span class="note">Envoyée au Sheet le ${fmtDate(c.sentAt)}. Une correction la fera repasser « à valider ».</span>`
       : c.validee ? `<span class="note">Validée · elle part au Sheet dès qu'il y a du réseau.</span><button class="btn" id="r-envoi">Envoyer maintenant</button>`
-      : `<button class="btn go big" id="r-valider">✓ Valider et envoyer</button><span class="note"><b>Pas encore validée</b> : corrige ce que tu veux, autant de fois que nécessaire. Rien ne part au Sheet avant « Valider ».</span>`}</div>
+      : `<button class="btn go big" id="r-valider">✓ Valider et envoyer</button><span class="note"><b>Pas encore validée</b> : corrige ce que tu veux, autant de fois que nécessaire. Rien ne part au Sheet avant « Valider ».</span>`}
+      ${c.sentAt ? '' : '<button class="btn danger" id="r-suppr">Supprimer cette course</button>'}</div>
     ${c.nageurs.map((s, i) => blocNageur(c, s, i)).join('')}
   </div></div></div>`;
   $('#r-home').onclick = () => { view = 'accueil'; render(); autoEnvoi(); };
@@ -952,6 +953,11 @@ function renderRecap() {
   if ($('#r-valider')) $('#r-valider').onclick = async () => { const r = await validerCourses([c]); toast(msgValide(r), 4000); if (view === 'recap' && C === c) renderRecap(); };
   if ($('#r-envoi')) $('#r-envoi').onclick = async () => { try { await envoyerCourses([c]); toast('✓ Course envoyée au Sheet'); } catch (e) { toast(e.message, 4000); } if (view === 'recap' && C === c) renderRecap(); };
   if ($('#r-rouvrir')) $('#r-rouvrir').onclick = () => { rouvrir(c); annuler(); };
+  // Course d'essai ou erreur : effacée de l'appareil (jamais envoyée). Du programme, elle redevient « à venir » et se prépare à neuf.
+  if ($('#r-suppr')) armed($('#r-suppr'), 'Confirmer : supprimer (définitif)', () => {
+    DB.hist = DB.hist.filter(x => x !== c); DB.ouvertes = DB.ouvertes.filter(x => x !== c);
+    save(); C = null; view = 'accueil'; render(); toast('Course supprimée');
+  });
   $('#r-serie').onchange = e => { c.serie = e.target.value.trim(); retouche(); };
   $('#app').querySelectorAll('[data-f]').forEach(el => {
     const ev = el.tagName === 'BUTTON' ? 'onclick' : 'onchange';
