@@ -230,7 +230,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v23';
+const APP_VERSION = 'v24';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -340,7 +340,14 @@ const PLAN = (() => { try { return JSON.parse(getLS(KEY_PLAN)); } catch (e) { re
 const actif = n => n.actif !== false && String(n.actif).toUpperCase() !== 'FALSE';
 const NAGEURS = (PLAN && PLAN.nageurs || []).filter(actif);
 
-const nbL = c => c.distance / c.bassin;
+// Pas des temps (21/11, demande de Sam) : en 25 m, dès le 200, un mur tous les 50 m (un « segment » = 50 m).
+// Tout le moteur compte en segments : un segment = une longueur quand le pas = le bassin.
+const pasDe = c => c.pas || c.bassin;
+const pasDefaut = (distance, bassin) => bassin === 25 && distance >= 200 ? 50 : bassin;
+const pasPossibles = (distance, bassin, nage) => [...new Set([bassin, 50, 100])].filter(p => p >= bassin && p % bassin === 0 && distance % p === 0
+  && (nage !== '4N' || (distance / p) % 4 === 0));
+const nbL = c => c.distance / pasDe(c);
+const libL = (c, k) => pasDe(c) === c.bassin ? `L${k}` : `${k * pasDe(c)} m`;   // « L3 », ou « 150 m » quand le pas n'est pas le bassin
 const nageL = (c, k) => c.nage === '4N' ? ORDRE_4N[Math.floor((k - 1) * 4 / nbL(c))] : c.nage;   // k : 1 à nbL
 const rappelCB = n => n === 'NL' || n === 'Dos' ? 'chaque bras' : 'le cycle';
 const prenom = s => s.prenom || s.nom;
@@ -369,9 +376,9 @@ function pushUndo(e) { C.undo.push(e); }
 function libelleGeste(e) {
   const s = C.nageurs[e.i];
   if (e.t === 'depart') return 'Départ';
-  if (e.t === 'mur') return `mur de ${prenom(s)} (L${s.murs.length})`;
-  if (e.t === 'coulee') return `coulée de ${prenom(s)} (L${e.L})`;
-  if (e.t === 'cb') return `CB de ${prenom(s)} (L${e.L})`;
+  if (e.t === 'mur') return `mur de ${prenom(s)} (${libL(C, s.murs.length)})`;
+  if (e.t === 'coulee') return `coulée de ${prenom(s)} (${libL(C, e.L)})`;
+  if (e.t === 'cb') return `CB de ${prenom(s)} (${libL(C, e.L)})`;
   if (e.t === 'statut') return `statut de ${prenom(s)}`;
   return 'geste';
 }
@@ -387,7 +394,7 @@ function mur(i, t) {
   if (s.statut === 'abandon') { toast(`${prenom(s)} : abandon`); return; }
   if (fini(c, s)) { toast(`${prenom(s)} a fini`); return; }
   const prev = s.murs.length ? s.murs[s.murs.length - 1] : c.T0;
-  if (t - prev < S_PAR_M * c.bassin * 1000) { refus(i); bip(220, 0.25); return; } // goutte d'eau : rien d'enregistré
+  if (t - prev < S_PAR_M * pasDe(c) * 1000) { refus(i); bip(220, 0.25); return; } // goutte d'eau : rien d'enregistré
   s.murs.push(t); pushUndo({ t: 'mur', i }); save();
   bip(1000, 0.07); flash(i, 'tapok');
   if (toutFini(c)) { finir(true); return; }
@@ -468,7 +475,7 @@ function lignesCourse(c) {
     for (let k = 0; k < n; k++) rows.push({
       date, id_compet: c.idCompet || '', competition: c.competition || '', id_course: idCourse, num_epreuve: c.numEpreuve || '',
       distance: c.distance, nage: c.nage, bassin_m: c.bassin, serie: c.serie || '', couloir: s.couloir,
-      id_nageur: s.id_nageur || '', nom: s.nom, prenom: s.prenom, longueur: k + 1, nage_longueur: nageL(c, k + 1),
+      id_nageur: s.id_nageur || '', nom: s.nom, prenom: s.prenom, longueur: (k + 1) * pasDe(c) / c.bassin, nage_longueur: nageL(c, k + 1),
       split_s: r2(sp[k]), cumul_s: r2(cum[k]), cumul_recale_s: e != null ? r2(rec[k]) : '',
       coulee: s.coulees[k + 1] || '', coups_bras: s.cb[k + 1] || '',
       temps_officiel_s: s.officiel ?? '', decalage_s: e != null ? r2(e) : '',
@@ -565,7 +572,8 @@ function ouvrirProgramme(id) {
   if (!g.suivis.length) { toast('Aucun nageur suivi dans cette série'); return; }
   const P = DB.prog, n = g.distance / P.bassin;
   if (!Number.isInteger(n) || (g.nage === '4N' && n % 4)) { toast('Distance impossible dans ce bassin'); return; }
-  const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: g.distance, nage: g.nage, bassin: P.bassin,
+  const pas = pasPossibles(g.distance, P.bassin, g.nage).includes(pasDefaut(g.distance, P.bassin)) ? pasDefaut(g.distance, P.bassin) : P.bassin;
+  const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: g.distance, nage: g.nage, bassin: P.bassin, pas,
     serie: g.serie, competition: P.competition, idCompet: P.id_compet, idCourse: id, numEpreuve: g.num_epreuve || '', sexe: g.sexe, tour: g.tour, heure: g.heure, jour: g.jour,
     nageurs: g.suivis.map(l => ({ id_nageur: String(l.id_nageur || ''), nom: String(l.nom || ''), prenom: String(l.prenom || l.nageur || ''), couloir: Number(l.couloir), engagement: l.engagement_s,
       murs: [], coulees: {}, cb: {}, statut: null, remarque: '', officiel: null, cumuls: null })),
@@ -614,7 +622,7 @@ function lierProgramme() {
 
 // ---------- Accueil ----------
 function formDefaut() {
-  return { distance: 100, nage: 'NL', bassin: 25, serie: '', competition: DB.prefs.competition || '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
+  return { distance: 100, nage: 'NL', bassin: 25, pas: null, serie: '', competition: DB.prefs.competition || '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
 }
 function optionsNageurs(sel) {
   const par = {};
@@ -639,6 +647,7 @@ function renderAccueil() {
     <div class="field"><span class="lbl">Distance</span><div class="choix" id="f-dist">${DISTANCES.map(d => `<button data-v="${d}" class="${F.distance === d ? 'on' : ''}">${d}</button>`).join('')}</div></div>
     <div class="form">
       <div class="field"><span class="lbl">Bassin</span><div class="choix" id="f-bassin">${[25, 50].map(b => `<button data-v="${b}" class="${F.bassin === b ? 'on' : ''}">${b} m</button>`).join('')}</div></div>
+      <div class="field"><span class="lbl">Temps pris tous les</span><div class="choix" id="f-pas"></div></div>
       <div class="field"><label for="f-serie">Série</label><input id="f-serie" type="text" value="${esc(F.serie)}" placeholder="ex. 3"></div>
       <div class="field"><label for="f-compet">Compétition (facultatif)</label><input id="f-compet" type="text" value="${esc(F.competition)}" placeholder="ex. Interclubs Montauban"></div>
     </div>
@@ -669,12 +678,19 @@ function renderAccueil() {
     <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étapes C1 à C3a : programme liveFFN, courses envoyées au Sheet après validation).</p>
   </div></div></div>`;
   const info = () => {
+    const ps = pasPossibles(F.distance, F.bassin, F.nage);
+    if (F.pas && !ps.includes(F.pas)) F.pas = null;
+    const pasF = F.pas || (ps.includes(pasDefaut(F.distance, F.bassin)) ? pasDefaut(F.distance, F.bassin) : F.bassin);
+    $('#f-pas').innerHTML = (ps.length ? ps : [F.bassin]).map(p => `<button data-v="${p}" class="${p === pasF ? 'on' : ''}">${p} m</button>`).join('');
+    $('#app').querySelectorAll('#f-pas button').forEach(b => b.onclick = () => { F.pas = Number(b.dataset.v); info(); });
+    const nT = F.distance / pasF;
     const n = F.distance / F.bassin;
-    $('#f-info').innerHTML = Number.isInteger(n) ? `${n} longueur${n > 1 ? 's' : ''}${F.nage === '4N' && n % 4 === 0 ? ' · ' + Array.from({ length: n }, (_, k) => ORDRE_4N[Math.floor(k * 4 / n)]).join(', ') : ''}${F.nage === '4N' && n % 4 ? ' · <span class="warn">en 4N, il faut un nombre de longueurs multiple de 4</span>' : ''}` : '<span class="warn">Distance impossible dans ce bassin</span>';
+    $('#f-info').innerHTML = (Number.isInteger(n) && pasF !== F.bassin ? `${nT} temps de passage (tous les ${pasF} m) · ` : '') + (Number.isInteger(n) ? `${n} longueur${n > 1 ? 's' : ''}${F.nage === '4N' && n % 4 === 0 ? ' · ' + Array.from({ length: n }, (_, k) => ORDRE_4N[Math.floor(k * 4 / n)]).join(', ') : ''}${F.nage === '4N' && n % 4 ? ' · <span class="warn">en 4N, il faut un nombre de longueurs multiple de 4</span>' : ''}` : '<span class="warn">Distance impossible dans ce bassin</span>');
   };
   info();
   const choix = (id, key, num) => $('#app').querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => {
     F[key] = num ? Number(b.dataset.v) : b.dataset.v;
+    if (key !== 'nage') F.pas = null;   // nouvelle distance ou nouveau bassin : pas par défaut
     $('#app').querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('on', x === b)); info();
   });
   choix('f-nage', 'nage'); choix('f-dist', 'distance', true); choix('f-bassin', 'bassin', true);
@@ -695,6 +711,8 @@ function renderAccueil() {
 function creerCourse() {
   const F = RT.form, n = F.distance / F.bassin;
   if (!Number.isInteger(n) || n < 1) { toast('Distance impossible dans ce bassin'); return; }
+  const ps = pasPossibles(F.distance, F.bassin, F.nage);
+  const pas = F.pas && ps.includes(F.pas) ? F.pas : ps.includes(pasDefaut(F.distance, F.bassin)) ? pasDefaut(F.distance, F.bassin) : F.bassin;
   if (F.nage === '4N' && n % 4) { toast('En 4N, il faut un nombre de longueurs multiple de 4 (100 en 25 m, 200 en 50 m…)', 4000); return; }
   const nageurs = [];
   for (const r of F.rows) {
@@ -709,7 +727,7 @@ function creerCourse() {
   if (!nageurs.length) { toast('Choisis au moins un nageur'); return; }
   const cl = nageurs.map(s => s.couloir);
   if (new Set(cl).size !== cl.length) { toast('Deux nageurs dans le même couloir'); return; }
-  const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: F.distance, nage: F.nage, bassin: F.bassin,
+  const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: F.distance, nage: F.nage, bassin: F.bassin, pas,
     serie: F.serie.trim(), competition: F.competition.trim(), nageurs, T0: null, undo: [], done: false };
   DB.prefs.competition = c.competition;
   DB.ouvertes.unshift(c); save();
@@ -757,10 +775,10 @@ function renderCourse() {
   <div class="view">
     <div class="bar">
       <div class="b1"><button class="btn" id="c-home" aria-label="Accueil Compétition">←</button>
-        <div class="titre">${esc(nomCourse(c))}<small>${nbL(c)} longueurs</small></div>
+        <div class="titre">${esc(nomCourse(c))}<small>${pasDe(c) === c.bassin ? nbL(c) + ' longueurs' : nbL(c) + ' temps · tous les ' + pasDe(c) + ' m'}</small></div>
         <div class="spacer"></div>
         <div class="clock" id="c-clock">${part ? '' : '0"0'}</div></div>
-      <div class="b2"><button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
+      <div class="b2">${part || pasPossibles(c.distance, c.bassin, c.nage).length < 2 ? '' : `<button class="btn" id="c-pas" aria-label="Temps pris tous les">⏱ ${pasDe(c)} m</button>`}<button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
         ${part ? '<button class="btn" id="c-fin">Terminer</button>' : ''}
         <button class="btn undo" id="c-undo">↶ ANNULER</button></div>
     </div>
@@ -780,6 +798,11 @@ function renderCourse() {
   </div>`;
   $('#c-home').onclick = () => { RT.pad = null; view = 'accueil'; render(); };
   $('#c-vue').onclick = ouvrirVue;
+  if ($('#c-pas')) $('#c-pas').onclick = () => {   // avant le départ seulement : 25 → 50 → 100 m…
+    if (c.T0 != null) return;
+    const ps = pasPossibles(c.distance, c.bassin, c.nage), k = ps.indexOf(pasDe(c));
+    c.pas = ps[(k + 1) % ps.length]; RT.pad = null; save(); toast(`Temps pris tous les ${c.pas} m`); renderCourse();
+  };
   bindPress($('#c-undo'), () => annuler());
   if ($('#c-fin')) $('#c-fin').onclick = ouvrirTerminer;
   if ($('#c-go')) bindPress($('#c-go'), t => depart(t));
@@ -806,11 +829,12 @@ function carteLigne(c, i) {
 // Place les coulées depuis le mur que le nageur vient de quitter, et la zone mur entre 15 m et le mur d'arrivée.
 function placerLigne(card, c, s) {
   const eau = card.querySelector('.eau'); if (!eau) return;
-  const W = eau.clientWidth, H = eau.clientHeight, m = W / c.bassin;
+  const W = eau.clientWidth, H = eau.clientHeight, m = W / pasDe(c);   // aux 50 m en 25 m : la ligne montre le 50 m déplié
   const bw = Math.max(40, Math.min(64, W * 0.07, (H / 2 - 6) * 1.6)), gap = 4;
   eau.style.setProperty('--bw', bw + 'px');
   const L = lEnCours(c, s);
-  const versPlots = L % 2 === 0;                             // longueurs paires : il revient vers les plots
+  const lps = pasDe(c) / c.bassin;                           // longueurs par segment
+  const versPlots = lps % 2 === 1 && L % 2 === 0;            // longueurs paires : il revient vers les plots (segment pair = toujours depuis les plots)
   const depGauche = (plots() === 'g') !== versPlots;          // il part du bord gauche de l'écran ?
   let finCoulees = 0;
   [RANG_A, COULEES.filter(v => !RANG_A.includes(v))].forEach(rang => {
@@ -855,7 +879,7 @@ function majCourse() {
     const L = lEnCours(c, s), card = el.closest('.card');
     const depGauche = estCote() ? placerLigne(card, c, s) : null;
     const fleche = depGauche == null || f || ab ? '' : depGauche ? ' →' : ' ←';
-    $('.t-len', card).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `L${L}/${n} · ${nageL(c, L)}${fleche}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
+    $('.t-len', card).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `${pasDe(c) === c.bassin ? `L${L}/${n}` : `${L * pasDe(c)} m (${L}/${n})`} · ${nageL(c, L)}${fleche}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
     $('.t-split', el).textContent = k ? fmt(sp[k - 1]) : '—';
     $('.t-cum', el).textContent = k ? `${f ? 'final' : 'cumul'} ${fmt(cum[k - 1])}${s.cb[k] ? ' · CB ' + s.cb[k] : ''}` : (c.T0 == null ? (s.engagement ? 'engagé ' + fmt(s.engagement) : 'attend le départ') : 'L1 en cours');
     $('.t-run', el).textContent = c.T0 == null ? '' : f ? '' : ab ? '' : fmt((now - c.T0) / 1000, 1);
@@ -889,13 +913,13 @@ function majPad() {
     box.hidden = false; box._i = p.i;
     box.innerHTML = `
       <div class="pad-head"><b>CB · C${s.couloir} ${esc(prenom(s))}</b><span id="pad-info"></span><button class="btn" id="pad-x">Fermer</button></div>
-      <div class="pad-lens">${Array.from({ length: n }, (_, k) => `<button class="pad-len" data-len="${k + 1}"><small>L${k + 1} ${nageL(c, k + 1)}</small><b></b></button>`).join('')}</div>
+      <div class="pad-lens">${Array.from({ length: n }, (_, k) => `<button class="pad-len" data-len="${k + 1}"><small>${libL(c, k + 1)} ${nageL(c, k + 1)}</small><b></b></button>`).join('')}</div>
       <div class="pad-keys">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map(d => `<button class="pad-key" data-d="${d}">${d}</button>`).join('')}<button class="pad-key" data-d="del">⌫</button><button class="pad-key go" data-d="ok">✓</button></div>`;
     bindPress($('#pad-x'), () => { RT.pad = null; majCourse(); grille(); });
     box.querySelectorAll('.pad-len').forEach(b => bindPress(b, () => { if (!RT.pad) return; RT.pad.L = +b.dataset.len; RT.pad.buf = ''; majCourse(); }));
     box.querySelectorAll('.pad-key').forEach(b => bindPress(b, () => touchePad(b.dataset.d)));
   }
-  $('#pad-info', box).textContent = `L${p.L} ${nageCourante} : ${p.buf ? p.buf + '…' : 'tape 2 chiffres'} · rappel : crawl/dos = chaque bras ; brasse/pap = le cycle (ici : ${rappelCB(nageCourante)})`;
+  $('#pad-info', box).textContent = `${libL(c, p.L)} ${nageCourante} : ${p.buf ? p.buf + '…' : 'tape 2 chiffres'} · rappel : crawl/dos = chaque bras ; brasse/pap = le cycle (ici : ${rappelCB(nageCourante)})`;
   box.querySelectorAll('.pad-len').forEach(b => {
     const L = +b.dataset.len; b.classList.toggle('on', L === p.L);
     $('b', b).textContent = L === p.L && p.buf ? p.buf + '…' : (s.cb[L] ?? '·');
@@ -919,7 +943,7 @@ function ouvrirTerminer() {
       ${c.nageurs.map((s, i) => `<div class="trow"><b>C${s.couloir} ${esc(prenom(s))}</b>${fini(c, s) && s.statut !== 'abandon' ? `<span class="note">arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}</span>` : ''}
         <div class="choix">${[[null, 'Nage'], ['abandon', 'Abandon'], ['dsq', 'DSQ']].map(([v, t]) => `<button data-i="${i}" data-v="${v || ''}" class="${(s.statut || null) === v ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}
       <button class="btn danger big" id="t-fin">Fin de la course maintenant</button>
-      <p class="note">Les longueurs non tapées seront « manque ».</p>
+      <p class="note">Les temps non tapés seront « manque ».</p>
       <button class="btn" id="t-x">Fermer</button>
     </div></div>`;
     $('#layer').querySelectorAll('.choix button').forEach(b => b.onclick = () => { setStatut(+b.dataset.i, b.dataset.v || null); if (!c.done) dessine(); });
@@ -939,7 +963,7 @@ function renderRecap() {
     <div class="actions"><button class="btn" id="r-home">← Compétition</button>
       ${peutRouvrir(c) ? `<button class="btn" id="r-rouvrir">↶ Annuler le dernier geste (rouvre la course)</button>` : ''}</div>
     <h1>${esc(nomCourse(c))}</h1>
-    <p class="note">${c.endedAt ? 'Terminée le ' + fmtDate(c.endedAt) : ''} · ${n} longueurs. Corrige un temps de passage (cumul) si un mur a été mal tapé : le split se recalcule. Les taps d'origine restent gardés.</p>
+    <p class="note">${c.endedAt ? 'Terminée le ' + fmtDate(c.endedAt) : ''} · ${pasDe(c) === c.bassin ? n + ' longueurs' : n + ' temps de passage (tous les ' + pasDe(c) + ' m)'}. Corrige un temps de passage (cumul) si un mur a été mal tapé : le split se recalcule. Les taps d'origine restent gardés.</p>
     <div class="form"><div class="field"><label for="r-serie">Série</label><input id="r-serie" type="text" value="${esc(c.serie || '')}"></div>
       <div class="field"><label for="r-compet">Compétition</label><input id="r-compet" type="text" value="${esc(c.competition || '')}"></div></div>
     <div class="actions">${c.sentAt ? `<span class="note">Envoyée au Sheet le ${fmtDate(c.sentAt)}. Une correction la fera repasser « à valider ».</span>`
@@ -980,9 +1004,9 @@ function blocNageur(c, s, i) {
     ${e != null && Math.abs(e) > 1 ? `<div class="alerte">⚠ Écart de plus d'1" : un mur oublié ou en trop ? Vérifie les splits avant de garder le recalage.</div>` : ''}
     ${s.officiel != null && final == null ? `<div class="alerte">Pas de temps final mesuré : le recalage ne s'applique pas.</div>` : ''}
     <div class="tablewrap"><table>
-      <thead><tr><th>Long.</th><th>Nage</th><th>Split${e != null ? ' (recalé)' : ''}</th><th>Cumul mesuré</th>${e != null ? '<th>Cumul recalé</th>' : ''}<th>Coulée</th><th>CB</th><th></th></tr></thead>
+      <thead><tr><th>${pasDe(c) === c.bassin ? 'Long.' : 'Passage'}</th><th>Nage</th><th>Split${e != null ? ' (recalé)' : ''}</th><th>Cumul mesuré</th>${e != null ? '<th>Cumul recalé</th>' : ''}<th>Coulée</th><th>CB</th><th></th></tr></thead>
       <tbody>${Array.from({ length: n }, (_, k) => `<tr>
-        <td>L${k + 1}</td><td>${nageL(c, k + 1)}</td>
+        <td>${libL(c, k + 1)}</td><td>${nageL(c, k + 1)}</td>
         <td class="${cum[k] == null ? 'manque' : ''}">${cum[k] == null ? 'manque' : sp[k] == null ? '—' : (sp[k] <= 0 ? '⚠ ' : '') + fmt(sp[k])}</td>
         <td><input data-f="cumul" data-i="${i}" data-k="${k}" type="text" inputmode="decimal" value="${cum[k] != null ? fmtEdit(cum[k]) : ''}" placeholder="manque" aria-label="Cumul L${k + 1}"></td>
         ${e != null ? `<td>${rec[k] != null ? fmt(rec[k]) : ''}</td>` : ''}
