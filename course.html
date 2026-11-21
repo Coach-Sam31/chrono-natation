@@ -230,7 +230,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v21';
+const APP_VERSION = 'v22';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -445,7 +445,7 @@ const peutRouvrir = c => c.done && !c.retouche && !c.validee && !c.sentAt && c.u
 
 // ---------- Lien avec le Google Sheet (C2) : onglet Competition, une ligne par longueur et par nageur ----------
 // Même script et même code secret que l'entraînement (code saisi une fois sur l'appareil, écran Entraînement).
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzYb6vBHxEX3fqJYsXS-O1LqGJdQ5pi4gbaZvVz83nR57c6B7zoIBus3Uf--8si9rnlEw/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzG1Kn0xPUSRcawCO-quE2LiVHyutcp0cu0TMAZqGGIOvMtbQMg9U4m-egNnvK6xRoDtg/exec';
 const KEY_SECRET = 'chrono-secret';    // lecture seule
 async function callSheet(body) {
   const secret = getLS(KEY_SECRET);

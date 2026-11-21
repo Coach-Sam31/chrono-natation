@@ -306,7 +306,7 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v21';   // même numéro que course.html (un seul numéro pour toute l'app, depuis la v21)
+const APP_VERSION = 'v22';   // même numéro que course.html (un seul numéro pour toute l'app, depuis la v21)
 const KEY = 'chrono-maquette-v1';            // v10 : une seule série en cours. Reprise au premier lancement de la v11, puis vidée.
 const KEY_LIVE = 'chrono-live-v2';           // toutes les séries ouvertes (prêtes ou en cours)
 const KEY_HIST = 'chrono-maquette-historique-v1';
@@ -730,7 +730,7 @@ function appliquerAppelPartout() {
 
 // ---------- Lien avec le Google Sheet (Apps Script) ----------
 // L'adresse est publique ; sans le code secret (gardé sur l'appareil), le script refuse tout.
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzYb6vBHxEX3fqJYsXS-O1LqGJdQ5pi4gbaZvVz83nR57c6B7zoIBus3Uf--8si9rnlEw/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzG1Kn0xPUSRcawCO-quE2LiVHyutcp0cu0TMAZqGGIOvMtbQMg9U4m-egNnvK6xRoDtg/exec';
 const KEY_SECRET = 'chrono-secret', KEY_PLAN = 'chrono-plan';
 function getLS(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function setLS(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
