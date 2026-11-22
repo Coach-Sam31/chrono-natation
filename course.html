@@ -243,7 +243,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="ns" hidden></div>
 
 <script>
-const APP_VERSION = 'v25';
+const APP_VERSION = 'v26';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -332,10 +332,12 @@ function bindPress(el, action) {
 }
 
 // ---------- Données ----------
+let dernierEcrit = null;   // le texte que cette page a écrit (ou lu) en dernier dans la mémoire principale
 function chargerDB() {
   try {
-    const d = JSON.parse(localStorage.getItem(KEY_COURSES));
-    if (d && Array.isArray(d.ouvertes) && Array.isArray(d.hist)) return Object.assign({ prefs: {} }, d);
+    const brut = localStorage.getItem(KEY_COURSES);
+    const d = JSON.parse(brut);
+    if (d && Array.isArray(d.ouvertes) && Array.isArray(d.hist)) { dernierEcrit = brut; return Object.assign({ prefs: {} }, d); }
   } catch (e) {}
   return { ouvertes: [], hist: [], prefs: {} };
 }
@@ -347,16 +349,78 @@ const RT = { pad: null, form: null };  // jamais sauvegardé : pavé CB ouvert, 
 //  1) la mémoire principale de l'app (localStorage), 2) une copie de secours sur l'iPad (IndexedDB, autre réserve de place),
 //  3) une copie au Sheet (onglet Sauvegarde_courses) dès qu'une course est nagée et qu'il y a du réseau.
 // Si la 1re échoue, un bandeau rouge reste affiché (avant : un message de 7 s, facile à manquer).
+// v26 (retour du 22/11) : les copies ne s'écrasent plus, elles se complètent course par course.
+//  - chaque course porte un compteur `ver` (+1 à chaque vrai changement de cette course, détecté tout seul) et `maj` ;
+//  - avant d'écrire, on relit la mémoire : si quelqu'un d'autre (autre onglet, ancienne page) y a écrit, on fusionne d'abord ;
+//  - une course terminée ne redevient jamais « pas finie » par une copie : seul « Rouvrir » (ou ↶ Annuler) le fait, et c'est daté ;
+//  - une course supprimée exprès (Supprimer) est notée dans DB.supprimees et ne revient d'aucune copie.
 let nonSauve = false;
+const META = new Set(['maj', 'ver', 'sauveAt']);   // ce qui ne compte pas comme un changement de la course
+const empreinte = c => JSON.stringify(c, (k, x) => META.has(k) ? undefined : x);
+const empreintes = new Map();
+const toutesCourses = d => [...(d.ouvertes || []), ...(d.hist || [])];
+toutesCourses(DB).forEach(c => empreintes.set(c.uid, empreinte(c)));   // état au lancement : rien n'a encore changé
+function marquerChangements() {
+  const t = Date.now();
+  toutesCourses(DB).forEach(c => { const e = empreinte(c); if (empreintes.get(c.uid) !== e) { c.ver = (c.ver || 0) + 1; c.maj = t; empreintes.set(c.uid, e); } });
+}
+// Entre deux versions d'une même course, laquelle garder ?
+function gagnante(a, b) {
+  if (!!a.done !== !!b.done) {
+    const f = a.done ? a : b, o = a.done ? b : a;
+    if (!((o.rouvertAt || 0) > (f.endedAt || 0))) return f;   // pas rouverte exprès après la fin : la terminée gagne
+  }
+  if ((a.ver || 0) !== (b.ver || 0)) return (a.ver || 0) > (b.ver || 0) ? a : b;
+  return (b.maj || 0) > (a.maj || 0) ? b : a;
+}
+// Fusionne une autre copie (mémoire principale relue, copie de secours, Sheet) dans DB, sans jamais rien perdre.
+// Renvoie le nombre de courses ajoutées ou remplacées par une version plus avancée.
+function fusionner(autre) {
+  if (!autre) return 0;
+  const supp = new Set([...(DB.supprimees || []), ...(autre.supprimees || [])]);
+  const ici = new Map(toutesCourses(DB).map(c => [c.uid, c]));
+  let n = 0;
+  toutesCourses(autre).forEach(x => {
+    if (!x || !x.uid || supp.has(x.uid) || !Array.isArray(x.nageurs)) return;
+    const loc = ici.get(x.uid);
+    if (loc && (gagnante(loc, x) === loc || empreinte(loc) === empreinte(x))) return;
+    ici.set(x.uid, x); empreintes.set(x.uid, empreinte(x)); n++;
+  });
+  const avant = toutesCourses(DB).length;
+  if (n || supp.size !== (DB.supprimees || []).length) {
+    const garde = c => !supp.has(c.uid);
+    const ordre = [...toutesCourses(DB).map(c => c.uid), ...[...ici.keys()]].filter((u, i, a) => a.indexOf(u) === i);
+    const liste = ordre.map(u => ici.get(u)).filter(garde);
+    DB.ouvertes = liste.filter(c => !c.done);
+    DB.hist = liste.filter(c => c.done).sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
+    DB.supprimees = [...supp];
+    if (C) C = ici.get(C.uid) && garde(C) ? ici.get(C.uid) : null;
+  }
+  if (autre.prog && (!DB.prog || (autre.prog.maj || autre.prog.chargeLe || 0) > (DB.prog.maj || DB.prog.chargeLe || 0))) { DB.prog = autre.prog; n++; }
+  DB.rev = Math.max(DB.rev || 0, autre.rev || 0);
+  if ((autre.sauveAt || 0) > (DB.sauveAt || 0)) DB.sauveAt = autre.sauveAt;
+  return n + Math.max(0, avant - toutesCourses(DB).length);
+}
+// La mémoire principale a-t-elle été écrite par quelqu'un d'autre depuis notre dernière écriture ? On la reprend (fusion).
+function relireMemoire() {
+  const brut = getLS(KEY_COURSES);
+  if (!brut || brut === dernierEcrit) return 0;
+  try { const s = JSON.parse(brut); if (s && Array.isArray(s.hist)) { dernierEcrit = brut; return fusionner(s); } } catch (e) {}
+  return 0;
+}
 function save() {
+  marquerChangements();
+  relireMemoire();
   DB.rev = (DB.rev || 0) + 1; DB.savedAt = Date.now();
-  if (C) C.maj = Date.now();
-  copieSecours();
-  let ok = ecrire(KEY_COURSES, DB);
-  if (!ok) { faireDeLaPlace(); ok = ecrire(KEY_COURSES, DB); }
+  let json = JSON.stringify(DB);
+  copieSecours(json);
+  let ok = ecrireTexte(json);
+  if (!ok) { faireDeLaPlace(); json = JSON.stringify(DB); ok = ecrireTexte(json); }
+  if (ok) dernierEcrit = json;
   nonSauve = !ok; majBandeau();
   return ok;
 }
+function ecrireTexte(json) { try { localStorage.setItem(KEY_COURSES, json); return true; } catch (e) { return false; } }
 // Mémoire pleine : on retire ce qui ne sert plus (piles « Annuler » des courses finies depuis plus de 15 min).
 function faireDeLaPlace() { DB.hist.forEach(c => { if (c.undo && c.undo.length && Date.now() - (c.endedAt || 0) > ROUVRIR_MS) c.undo = []; }); }
 function majBandeau() {
@@ -372,8 +436,8 @@ function idb() {
     catch (e) { rej(e); }
   });
 }
-function copieSecours() {
-  const json = JSON.stringify(DB);
+function copieSecours(json) {
+  json = json || JSON.stringify(DB);
   idb().then(d => { d.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(json, 'courses'); }).catch(() => {});
 }
 async function lireSecours() {
@@ -572,7 +636,7 @@ async function sauverAuSheet() {
     const t = Date.now();
     await callSheet({ action: 'sauver_courses', courses: liste.map(c => ({ uid: c.uid, maj: c.maj || t, competition: c.competition || '', course: nomCourse(c) + ' · ' + c.nageurs.map(prenom).join(', '), json: JSON.stringify(c) })) });
     liste.forEach(c => { c.sauveAt = t; });
-    DB.sauveAt = t; ecrire(KEY_COURSES, DB); copieSecours();
+    DB.sauveAt = t; save();   // fusion d'abord : ne réécrit jamais une mémoire plus récente
   } catch (e) { /* pas de réseau, ou script pas encore mis à jour : on réessaiera */ }
   sauveEnCours = false;
 }
@@ -580,22 +644,13 @@ setInterval(sauverAuSheet, 120000);
 async function restaurerDuSheet() {
   let r;
   try { r = await callSheet({ action: 'restaurer_courses' }); } catch (e) { toast(e.message, 5000); return; }
-  const ici = {}; [...DB.ouvertes, ...DB.hist].forEach(c => { ici[c.uid] = c; });
-  const supp = DB.supprimees || [];
-  let n = 0;
-  (r.courses || []).forEach(x => {
-    if (supp.includes(x.uid)) return;
-    let c; try { c = JSON.parse(x.json); } catch (e) { return; }
-    const loc = ici[c.uid];
-    if (loc && (loc.maj || 0) >= (c.maj || 0)) return;
-    DB.hist = DB.hist.filter(y => y.uid !== c.uid); DB.ouvertes = DB.ouvertes.filter(y => y.uid !== c.uid);
-    (c.done ? DB.hist : DB.ouvertes).push(c); n++;
-  });
-  DB.hist.sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
+  // v26 : même règle que les autres copies (fusion course par course, une course finie ne redevient jamais « pas finie »)
+  const venues = (r.courses || []).map(x => { try { return JSON.parse(x.json); } catch (e) { return null; } }).filter(Boolean);
+  const n = fusionner({ hist: venues });
   save(); toast(n ? `✓ ${n} course${n > 1 ? 's' : ''} récupérée${n > 1 ? 's' : ''} depuis le Sheet` : 'Rien à récupérer : l\'iPad a déjà toutes les courses du Sheet', 5000); render();
 }
 function rouvrir(c) {
-  c.done = false; delete c.endedAt; delete c.finAuto;
+  c.done = false; c.rouvertAt = Date.now(); delete c.endedAt; delete c.finAuto;
   DB.hist = DB.hist.filter(x => x !== c); DB.ouvertes.unshift(c);
   save(); C = c; view = 'course'; keepAwake(); renderCourse();
 }
@@ -616,17 +671,36 @@ function coursesProgramme() {
       serie: String(l.serie), num_epreuve: l.num_epreuve, suivis: g.lignes.filter(x => x.suivi).sort((a, b) => a.couloir - b.couloir) });
   }).sort((a, b) => (a.date + a.heure).localeCompare(b.date + b.heure) || a.serie - b.serie);
 }
-const courseDe = id => DB.ouvertes.find(c => c.idCourse === id) || DB.hist.find(c => c.idCourse === id) || null;
-// v25 : une course déjà préparée ou nagée est aussi retrouvée par épreuve + série (si un rechargement liveFFN
-// arrive sans n° d'épreuve, l'identifiant change : avant, la course apparaissait « à venir »).
-const memeCourse = (c, g) => c.idCompet != null && String(c.idCompet) === String(g.lignes[0].id_compet) && Number(c.distance) === Number(g.distance)
-  && c.nage === g.nage && (c.sexe || '') === (g.sexe || '') && (c.tour || 'Séries') === (g.tour || 'Séries') && String(c.serie) === String(g.serie);
-const courseDeG = g => courseDe(g.id) || DB.ouvertes.find(c => memeCourse(c, g)) || DB.hist.find(c => memeCourse(c, g)) || null;
+// v26 (retour du 22/11 : liveFFN avait recomposé des séries ; après rechargement, les courses nagées réapparaissaient
+// « à venir »). Une course est reliée au programme par la COMPÉTITION + l'ÉPREUVE (distance, nage, sexe, tour) + le NAGEUR,
+// jamais par le n° de série ni par l'heure : si liveFFN change la série ou le couloir, la course nagée reste nagée.
+const normTour = t => t && t !== 'Séries' ? String(t).replace(/\s+/g, ' ').trim() : 'Séries';
+const cleEpC = c => [String(c.idCompet), Number(c.distance), c.nage, c.sexe || '', normTour(c.tour)].join('|');
+const cleEpG = g => [String(g.lignes[0].id_compet), Number(g.distance), g.nage, g.sexe || '', normTour(g.tour)].join('|');
+const normNom = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
+const nomDeLigne = l => normNom(String(l.prenom || l.nageur || '') + String(l.nom || ''));
+const memeNageur = (s, l) => (s.id_nageur && l.id_nageur && String(s.id_nageur) === String(l.id_nageur))
+  || (!!nomDeLigne(l) && normNom(String(s.prenom || '') + String(s.nom || '')) === nomDeLigne(l));
+// Les courses (préparées, en cours ou nagées) de ce nageur dans cette épreuve, quelle que soit la série
+const coursesDe = (g, l) => toutesCourses(DB).filter(c => c.idCompet != null && cleEpC(c) === cleEpG(g) && c.nageurs.some(s => memeNageur(s, l)));
+const parti = c => c.done || c.T0 != null;
+// État d'une ligne du programme : il ne dépend que de ce qui a été chronométré (jamais de l'heure).
 function etatProg(g) {
-  const c = courseDeG(g);
-  if (!c) return { t: 'à venir', fait: false };
-  if (!c.done) return { t: c.T0 != null ? 'en cours' : 'prête', fait: false, c };
-  return { t: etatExport(c), fait: true, c };
+  const par = g.suivis.map(l => coursesDe(g, l));
+  const faites = par.map(cs => cs.find(parti) || null);   // course partie ou finie, pour chaque nageur suivi
+  const enCours = faites.find(c => c && !c.done);
+  if (enCours) return { t: 'en cours', fait: false, c: enCours };
+  if (faites.length && faites.every(Boolean)) {
+    const cs = [...new Set(faites)];
+    const t = cs.some(c => !c.validee && !c.sentAt) ? 'à valider' : cs.some(c => !c.sentAt) ? 'validée · envoi en attente' : 'envoyée ✓';
+    const autreSerie = cs.filter(c => String(c.serie) !== String(g.serie)).map(c => c.serie);
+    return { t: t + (autreSerie.length ? ` · nagée en série ${[...new Set(autreSerie)].join(', ')}` : ''), fait: true, c: cs[0] };
+  }
+  const prete = par.flat().find(c => !parti(c));
+  if (prete) return { t: 'prête', fait: false, c: prete };
+  const deja = g.suivis.filter((l, k) => faites[k]);
+  return { t: 'à venir' + (deja.length ? ` · déjà nagé : ${deja.map(l => l.prenom || l.nageur).join(', ')}` : ''), fait: false,
+    restants: g.suivis.filter((l, k) => !faites[k]) };
 }
 const nomEpreuve = g => `${g.distance} ${g.nage} ${SEXE[g.sexe] || ''}`.trim() + (g.tour && g.tour !== 'Séries' ? ' · ' + g.tour : '');
 async function chargerProgramme(lien) {
@@ -647,24 +721,58 @@ async function chargerProgramme(lien) {
     if (!x.num_epreuve && nums[cleEp(x)]) x.num_epreuve = nums[cleEp(x)];   // page « Épreuves » pas lue cette fois : on garde les n° d'avant
     return x;
   });
-  DB.prog = { lien, id_compet: String(r.id_compet), competition: r.competition, lieu: r.lieu, dates: r.dates, bassin: Number(r.bassin_m) || 25, chargeLe: Date.now(), lignes };
+  const anciensIds = new Set(coursesProgramme().map(g => g.id));
+  DB.prog = { lien, id_compet: String(r.id_compet), competition: r.competition, lieu: r.lieu, dates: r.dates, bassin: Number(r.bassin_m) || 25, chargeLe: Date.now(), maj: Date.now(), lignes };
+  DB.prog.changements = avant ? changementsProgramme(avant, anciensIds) : [];
   DB.prefs.competition = r.competition; save();
-  toast(`✓ ${r.competition} : ${lignes.length} engagements du club, ${lignes.filter(l => l.suivi).length} suivis`, 4000);
+  const nCh = DB.prog.changements.length;
+  toast(`✓ ${r.competition} : ${lignes.length} engagements du club, ${lignes.filter(l => l.suivi).length} suivis` + (nCh ? ` · ${nCh} changement${nCh > 1 ? 's' : ''} (voir Programme)` : ''), 5000);
   if (view === 'accueil') render();
 }
+// v26 : après un rechargement, ce qui a changé sur liveFFN pour tes nageurs suivis. Les courses parties ou nagées ne
+// bougent jamais ; une course seulement préparée (pas de DÉPART) dont la série, les couloirs ou les nageurs ont changé
+// est retirée : la toucher dans le programme la prépare à neuf, à jour.
+function changementsProgramme(avant, anciensIds) {
+  const out = [], P = DB.prog, G = coursesProgramme();
+  const ep = l => `${l.distance} ${l.nage} ${SEXE[l.sexe] || ''}`.trim() + (normTour(l.tour) !== 'Séries' ? ' · ' + l.tour : '');
+  const cle = l => [l.nageur_liveffn || l.nageur, l.distance, l.nage, l.sexe, normTour(l.tour)].join('|');
+  const vieux = new Map(avant.lignes.filter(l => l.suivi).map(l => [cle(l), l]));
+  P.lignes.filter(l => l.suivi).forEach(l => {
+    const a = vieux.get(cle(l)); vieux.delete(cle(l));
+    const g = G.find(x => x.lignes.includes(l));
+    const nage = g && coursesDe(g, l).some(parti);
+    if (!a) { out.push(`${l.prenom || l.nageur} · ${ep(l)} : nouvel engagement (série ${l.serie}, couloir ${l.couloir})`); return; }
+    const d = [];
+    if (String(a.serie) !== String(l.serie)) d.push(`série ${a.serie} → ${l.serie}`);
+    if (Number(a.couloir) !== Number(l.couloir)) d.push(`couloir ${a.couloir} → ${l.couloir}`);
+    if ((a.heure || '') !== (l.heure || '')) d.push(`${a.heure || '?'} → ${l.heure || '?'}`);
+    if (d.length) out.push(`${l.prenom || l.nageur} · ${ep(l)} : ${d.join(', ')}${nage ? ' (déjà nagée : gardée telle quelle)' : ''}`);
+  });
+  vieux.forEach(a => out.push(`${a.prenom || a.nageur} · ${ep(a)} : plus dans la liste de départ (forfait ?)`));
+  // Courses préparées depuis le programme mais pas parties : gardées seulement si leur série est restée la même
+  DB.ouvertes.filter(c => !parti(c) && !(c.undo || []).length && String(c.idCompet) === String(P.id_compet) && (c.deProg || anciensIds.has(c.idCourse))).forEach(c => {
+    const g = G.find(x => x.id === c.idCourse);
+    const pareil = g && g.suivis.length === c.nageurs.length && g.suivis.every(l => c.nageurs.some(s => memeNageur(s, l) && Number(s.couloir) === Number(l.couloir)));
+    if (pareil) return;
+    DB.ouvertes = DB.ouvertes.filter(x => x !== c); (DB.supprimees = DB.supprimees || []).push(c.uid);
+    out.push(`${nomCourse(c)} · ${c.nageurs.map(prenom).join(', ')} : course préparée retirée (changée sur liveFFN), à préparer à neuf`);
+  });
+  return out;
+}
 // Toucher une course du programme : elle se prépare (nageurs suivis, couloirs, engagement) et s'ouvre, prête pour le DÉPART.
-// Déjà préparée ou nagée : on la rouvre telle quelle (jamais recréée).
+// Déjà préparée, partie ou nagée (même dans une autre série) : on la rouvre telle quelle (jamais recréée).
 function ouvrirProgramme(id) {
   const g = coursesProgramme().find(x => x.id === id); if (!g) return;
-  const deja = courseDeG(g);
+  const e = etatProg(g), deja = e.c;
   if (deja) { C = deja; view = deja.done ? 'recap' : 'course'; if (!deja.done && deja.T0 != null) keepAwake(); render(); return; }
-  if (!g.suivis.length) { toast('Aucun nageur suivi dans cette série'); return; }
+  const suivis = e.restants || g.suivis;   // un nageur qui a déjà nagé cette épreuve n'est pas remis dans une nouvelle course
+  if (!suivis.length) { toast('Aucun nageur suivi dans cette série'); return; }
   const P = DB.prog, n = g.distance / P.bassin;
   if (!Number.isInteger(n) || (g.nage === '4N' && n % 4)) { toast('Distance impossible dans ce bassin'); return; }
   const pas = pasPossibles(g.distance, P.bassin, g.nage).includes(pasDefaut(g.distance, P.bassin)) ? pasDefaut(g.distance, P.bassin) : P.bassin;
   const c = { uid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), distance: g.distance, nage: g.nage, bassin: P.bassin, pas,
-    serie: g.serie, competition: P.competition, idCompet: P.id_compet, idCourse: id, numEpreuve: g.num_epreuve || '', sexe: g.sexe, tour: g.tour, heure: g.heure, jour: g.jour,
-    nageurs: g.suivis.map(l => ({ id_nageur: String(l.id_nageur || ''), nom: String(l.nom || ''), prenom: String(l.prenom || l.nageur || ''), couloir: Number(l.couloir), engagement: l.engagement_s,
+    serie: g.serie, competition: P.competition, idCompet: P.id_compet, idCourse: id, deProg: true, numEpreuve: g.num_epreuve || '', sexe: g.sexe, tour: g.tour, heure: g.heure, jour: g.jour,
+    nageurs: suivis.map(l => ({ id_nageur: String(l.id_nageur || ''), nom: String(l.nom || ''), prenom: String(l.prenom || l.nageur || ''), couloir: Number(l.couloir), engagement: l.engagement_s,
       murs: [], coulees: {}, cb: {}, statut: null, remarque: '', officiel: null, cumuls: null })),
     T0: null, undo: [], done: false };
   DB.ouvertes.unshift(c); save();
@@ -678,18 +786,21 @@ function blocProgramme() {
     <p class="note">La veille ou sur place, avec du réseau : le Sheet lit la liste de départ du club sur liveFFN. Tes nageurs sont reconnus et suivis ; toucher une course la prépare avec ses couloirs.</p>
     ${champ}<div class="actions"><button class="btn go big" id="p-charger">Charger depuis liveFFN</button></div>`;
   const G = coursesProgramme(), avecSuivis = G.filter(g => g.suivis.length);
-  // Prochaine = la 1re pas encore nagée dont l'heure n'est pas passée de plus de 15 min (une course sautée ne bloque pas la liste).
-  const d = new Date(Date.now() - 15 * 60000), pad = x => String(x).padStart(2, '0');
-  const seuil = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const restantes = avecSuivis.filter(g => !etatProg(g).fait);
-  const prochaine = restantes.find(g => !g.date || `${g.date} ${g.heure}` >= seuil) || restantes[restantes.length - 1];
-  const nonSuivis = P.lignes.filter(l => !l.suivi);
+  // v26 : Prochaine = la 1re course pas encore partie APRÈS la dernière course partie ou nagée (ordre du programme).
+  // Elle dépend de ce qui a été chronométré, pas de l'heure : une course non chronométrée (autre coach, oubli) ne bloque pas.
+  const etats = avecSuivis.map(etatProg);
+  const libre = k => !etats[k].fait && etats[k].t !== 'en cours';
+  let dernier = -1; etats.forEach((e, k) => { if (!libre(k)) dernier = k; });
+  const kP = [...avecSuivis.keys()].find(k => k > dernier && libre(k)) ?? [...avecSuivis.keys()].find(libre);
+  const prochaine = kP == null ? null : avecSuivis[kP];
+  const nonSuivis = P.lignes.filter(l => !l.suivi), ch = P.changements || [];
   let jour = '';
   return `<h2>Programme · ${esc(P.competition)}</h2>
     ${prochaine ? `<button class="btn go big" data-p="${esc(prochaine.id)}">▶ Prochaine : ${esc(prochaine.heure || '')} ${esc(nomEpreuve(prochaine))} · série ${esc(prochaine.serie)}<small style="display:block;font-family:var(--font-body);font-size:15px;letter-spacing:0;text-transform:none">${prochaine.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}`).join(' · ')}</small></button>` : ''}
     <p class="note">${esc(P.lieu || '')} · ${esc(P.dates || '')} · bassin ${P.bassin} m · ${P.lignes.length} engagements du club, ${P.lignes.filter(l => l.suivi).length} suivis · chargé le ${fmtDate(P.chargeLe)}</p>
-    <div class="hist">${avecSuivis.map(g => {
-      const e = etatProg(g), titreJour = g.jour !== jour ? `<h3 class="jour">${esc(g.jour || '')}</h3>` : ''; jour = g.jour;
+    ${ch.length ? `<details class="nons" id="p-ch"><summary>Changé sur liveFFN au dernier chargement (${ch.length}) : les courses nagées n'ont pas bougé</summary><ul class="note">${ch.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}
+    <div class="hist">${avecSuivis.map((g, k) => {
+      const e = etats[k], titreJour = g.jour !== jour ? `<h3 class="jour">${esc(g.jour || '')}</h3>` : ''; jour = g.jour;
       return `${titreJour}<button class="hist-item prog${g === prochaine ? ' live' : ''}${e.fait ? ' fait' : ''}" data-p="${esc(g.id)}">
         <b><span class="h">${esc(g.heure || '')}</span> ${esc(nomEpreuve(g))} · série ${esc(g.serie)}${g === prochaine ? ' · <span class="next">▶ prochaine</span>' : ''}</b>
         <span>${g.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}${l.engagement_s ? ' ' + fmt(l.engagement_s) : ''}`).join(' · ')} — ${e.t}</span></button>`;
@@ -699,13 +810,13 @@ function blocProgramme() {
       <div class="hist">${nonSuivis.map(l => `<button class="hist-item" data-suivre="${P.lignes.indexOf(l)}"><b>+ ${esc(l.nageur)}</b><span>${esc(l.heure || '')} ${esc(nomEpreuve(l))} · série ${esc(l.serie)} · C${l.couloir}</span></button>`).join('')}</div></details>` : ''}
     <details class="nons"><summary>Mettre à jour ou changer de compétition</summary>${champ}
       <div class="actions"><button class="btn" id="p-charger">Charger depuis liveFFN</button></div>
-      <p class="note">Recharger ne touche jamais une course déjà préparée ou nagée.</p></details>`;
+      <p class="note">Recharger ne touche jamais une course partie ou nagée, même si liveFFN a changé sa série. Une course seulement préparée (pas de DÉPART) est remise à jour si liveFFN l'a changée.</p></details>`;
 }
 function lierProgramme() {
   if ($('#p-charger')) $('#p-charger').onclick = () => chargerProgramme($('#p-lien').value);
   $('#app').querySelectorAll('[data-p]').forEach(b => b.onclick = () => ouvrirProgramme(b.dataset.p));
   $('#app').querySelectorAll('[data-suivre]').forEach(b => b.onclick = () => {
-    const l = DB.prog.lignes[+b.dataset.suivre]; l.suivi = true; l.suiviMain = true; save(); toast(`${l.nageur} suivi`); render();
+    const l = DB.prog.lignes[+b.dataset.suivre]; l.suivi = true; l.suiviMain = true; DB.prog.maj = Date.now(); save(); toast(`${l.nageur} suivi`); render();
   });
 }
 
@@ -795,7 +906,8 @@ function renderAccueil() {
   lierProgramme();
   $('#retour').onclick = () => { location.href = 'index.html'; };
   $('#app').querySelectorAll('[data-o]').forEach(b => b.onclick = () => { C = DB.ouvertes[+b.dataset.o]; view = 'course'; if (C.T0 != null) keepAwake(); render(); });
-  $('#app').querySelectorAll('[data-del]').forEach(b => armed(b, 'Confirmer', () => { DB.ouvertes.splice(+b.dataset.del, 1); save(); render(); }));
+  $('#app').querySelectorAll('[data-del]').forEach(b => armed(b, 'Confirmer', () => {
+    const [x] = DB.ouvertes.splice(+b.dataset.del, 1); if (x) (DB.supprimees = DB.supprimees || []).push(x.uid); save(); render(); }));
   $('#app').querySelectorAll('[data-h]').forEach(b => b.onclick = () => { C = DB.hist[+b.dataset.h]; view = 'recap'; render(); });
 }
 // Historique rangé en dossiers, un par compétition (le plus récent ouvert), au lieu d'une longue liste.
@@ -1245,15 +1357,24 @@ try { if (navigator.storage && navigator.storage.persist) navigator.storage.pers
 render();
 majBandeau();
 autoEnvoi();
-// Si la copie de secours (IndexedDB) est plus récente que la mémoire principale, c'est elle qui a raison
-// (mémoire principale pleine ou effacée) : on la reprend.
+// v26 : la copie de secours (IndexedDB) complète la mémoire principale course par course (avant : elle la remplaçait
+// en entier si son compteur était plus grand, ce qui pouvait ramener un état plus ancien).
 lireSecours().then(sec => {
-  if (!sec || !Array.isArray(sec.hist) || (sec.rev || 0) <= (DB.rev || 0)) { copieSecours(); return; }
-  DB = Object.assign({ prefs: {} }, sec);
-  ecrire(KEY_COURSES, DB);
-  C = DB.ouvertes.find(c => c.T0 != null) || null; view = C ? 'course' : 'accueil';
-  render(); toast('Courses reprises depuis la copie de secours de l\'iPad', 5000);
+  const n = sec && Array.isArray(sec.hist) ? fusionner(sec) : 0;
+  if (!n) { copieSecours(); return; }
+  save();
+  if (!C) { C = DB.ouvertes.find(c => c.T0 != null) || null; if (C) view = 'course'; }
+  render(); toast(`${n} course${n > 1 ? 's' : ''} complétée${n > 1 ? 's' : ''} depuis la copie de secours de l'iPad`, 5000);
 });
+// Une autre page de l'app (autre onglet) a écrit, ou l'app revient au premier plan : on reprend ce qu'elle a écrit,
+// pour ne jamais réécrire par-dessus avec un état plus ancien.
+function resynchroniser() {
+  if (!relireMemoire()) return;
+  if (view === 'course' && C && !C.done) renderCourse(); else render();
+}
+window.addEventListener('storage', e => { if (e.key === KEY_COURSES) resynchroniser(); });
+window.addEventListener('pageshow', e => { if (e.persisted) resynchroniser(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resynchroniser(); });
 setTimeout(sauverAuSheet, 3000);
 </script>
 <script>
