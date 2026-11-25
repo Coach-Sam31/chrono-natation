@@ -243,7 +243,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="ns" hidden></div>
 
 <script>
-const APP_VERSION = 'v26';
+const APP_VERSION = 'v27';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -459,26 +459,39 @@ const pasDe = c => c.pas || c.bassin;
 const pasDefaut = (distance, bassin) => bassin === 25 && distance >= 200 ? 50 : bassin;
 const pasPossibles = (distance, bassin, nage) => [...new Set([bassin, 50, 100])].filter(p => p >= bassin && p % bassin === 0 && distance % p === 0
   && (nage !== '4N' || (distance / p) % 4 === 0));
-const nbL = c => c.distance / pasDe(c);
-const libL = (c, k) => pasDe(c) === c.bassin ? `L${k}` : `${k * pasDe(c)} m`;   // « L3 », ou « 150 m » quand le pas n'est pas le bassin
-const nageL = (c, k) => c.nage === '4N' ? ORDRE_4N[Math.floor((k - 1) * 4 / nbL(c))] : c.nage;   // k : 1 à nbL
+// v27 (retour du 21/11 : changer la prise 25 / 50 m PENDANT une course) : chaque nageur a la liste des distances où un temps
+// est pris (s.pts, en m). Les temps tombent sur des repères ronds (multiples du pas) ; changer le pas en course refait la liste
+// à partir du dernier mur tapé. Sans s.pts (courses d'avant la v27, ou pas jamais changé en course) : la liste vient de c.pas.
+// « Segment » k (1 à nbP) = de debP à ptsDe[k-1] ; coulée et CB sont rangés par segment, comme avant.
+function grillePts(c, depuis, pas) {
+  const a = []; for (let m = (Math.floor(depuis / pas) + 1) * pas; m < c.distance; m += pas) a.push(m);
+  a.push(c.distance); return a;
+}
+const ptsDe = (c, s) => s.pts || grillePts(c, 0, pasDe(c));
+const nbP = (c, s) => ptsDe(c, s).length;
+const debP = (c, s, k) => k > 1 ? ptsDe(c, s)[k - 2] : 0;
+const lgP = (c, s, k) => ptsDe(c, s)[k - 1] - debP(c, s, k);
+const enLongueurs = (c, s) => ptsDe(c, s).every((m, k) => m === (k + 1) * c.bassin);
+const libP = (c, s, k) => enLongueurs(c, s) ? `L${k}` : `${ptsDe(c, s)[k - 1]} m`;   // « L3 », ou « 150 m » quand le pas n'est pas le bassin
+const nageP = (c, s, k) => c.nage === '4N' ? ORDRE_4N[Math.floor(debP(c, s, k) * 4 / c.distance)] : c.nage;
+const pasUnique = c => c.nageurs.every(s => !s.pts);
 const rappelCB = n => n === 'NL' || n === 'Dos' ? 'chaque bras' : 'le cycle';
 const prenom = s => s.prenom || s.nom;
 const nomComplet = s => s.prenom ? `${s.prenom} ${s.nom}` : s.nom;
 const coulTxt = v => v == null ? '' : String(v).replace('-', '−');
 function nomCourse(c) { return `${c.distance} ${c.nage}${c.sexe ? ' ' + (SEXE[c.sexe] || '') : ''}${c.tour && c.tour !== 'Séries' ? ' · ' + c.tour : ''} · ${c.bassin} m${c.serie ? ' · série ' + c.serie : ''}`; }
-const fini = (c, s) => s.murs.length >= nbL(c);
+const fini = (c, s) => s.murs.length >= nbP(c, s);
 const enCourse = (c, s) => !fini(c, s) && s.statut !== 'abandon';
 const toutFini = c => c.nageurs.every(s => !enCourse(c, s));
 // Longueur en cours (pour la coulée) : celle qui vient de commencer (départ plongé, puis après chaque virage).
-const lEnCours = (c, s) => Math.min(nbL(c), s.murs.length + 1);
+const lEnCours = (c, s) => Math.min(nbP(c, s), s.murs.length + 1);
 
 // Temps de passage (cumuls) mesurés, en secondes ; une correction du récap remplace la lecture des taps, qui restent gardés.
 function cumuls(c, s) {
   if (s.cumuls) return s.cumuls.slice();
-  return Array.from({ length: nbL(c) }, (_, k) => s.murs[k] != null && c.T0 != null ? (s.murs[k] - c.T0) / 1000 : null);
+  return Array.from({ length: nbP(c, s) }, (_, k) => s.murs[k] != null && c.T0 != null ? (s.murs[k] - c.T0) / 1000 : null);
 }
-function ecart(c, s) { const f = cumuls(c, s)[nbL(c) - 1]; return s.officiel != null && f != null ? s.officiel - f : null; }
+function ecart(c, s) { const f = cumuls(c, s)[nbP(c, s) - 1]; return s.officiel != null && f != null ? s.officiel - f : null; }
 function cumulsRecales(c, s) { const e = ecart(c, s) || 0; return cumuls(c, s).map(v => v == null ? null : v + e); }
 function splits(arr) { return arr.map((v, k) => v == null ? null : k === 0 ? v : arr[k - 1] == null ? null : v - arr[k - 1]); }
 function statutAuto(c, s) { return cumuls(c, s).every(v => v != null) ? 'ok' : 'manque'; }
@@ -489,9 +502,10 @@ function pushUndo(e) { C.undo.push(e); }
 function libelleGeste(e) {
   const s = C.nageurs[e.i];
   if (e.t === 'depart') return 'Départ';
-  if (e.t === 'mur') return `mur de ${prenom(s)} (${libL(C, s.murs.length)})`;
-  if (e.t === 'coulee') return `coulée de ${prenom(s)} (${libL(C, e.L)})`;
-  if (e.t === 'cb') return `CB de ${prenom(s)} (${libL(C, e.L)})`;
+  if (e.t === 'mur') return `mur de ${prenom(s)} (${libP(C, s, s.murs.length)})`;
+  if (e.t === 'coulee') return `coulée de ${prenom(s)} (${libP(C, s, e.L)})`;
+  if (e.t === 'cb') return `CB de ${prenom(s)} (${libP(C, s, e.L)})`;
+  if (e.t === 'pas') return `temps tous les ${pasDe(C)} m`;
   if (e.t === 'statut') return `statut de ${prenom(s)}`;
   return 'geste';
 }
@@ -507,7 +521,7 @@ function mur(i, t) {
   if (s.statut === 'abandon') { toast(`${prenom(s)} : abandon`); return; }
   if (fini(c, s)) { toast(`${prenom(s)} a fini`); return; }
   const prev = s.murs.length ? s.murs[s.murs.length - 1] : c.T0;
-  if (t - prev < S_PAR_M * pasDe(c) * 1000) { refus(i); bip(220, 0.25); return; } // goutte d'eau : rien d'enregistré
+  if (t - prev < S_PAR_M * lgP(c, s, s.murs.length + 1) * 1000) { refus(i); bip(220, 0.25); return; } // goutte d'eau : rien d'enregistré
   s.murs.push(t); pushUndo({ t: 'mur', i }); save();
   bip(1000, 0.07); flash(i, 'tapok');
   if (toutFini(c)) { finir(true); return; }
@@ -525,7 +539,7 @@ function cbValeur(v) {
   const s = c.nageurs[p.i], L = p.L, avant = s.cb[L] ?? null;
   if (v == null) delete s.cb[L]; else s.cb[L] = String(Number(v));
   pushUndo({ t: 'cb', i: p.i, L, avant }); save();
-  if (v != null) p.L = Math.min(nbL(c), L + 1);
+  if (v != null) p.L = Math.min(nbP(c, s), L + 1);
   p.buf = ''; majCourse();
 }
 function setStatut(i, v) {
@@ -535,6 +549,26 @@ function setStatut(i, v) {
   s.statut = v; save();
   if (toutFini(c) && c.T0 != null) { fermerLayer(); finir(true); return; }
   majCourse();
+}
+// v27 : ⏱ change le pas à tout moment. Avant le DÉPART : pour toute la course. Pendant : pour chaque nageur encore dans l'eau,
+// à partir de son prochain mur (repères ronds : passer à 50 m à 75 m → prochain temps à 100 m). C'est un geste : ↶ Annuler le défait.
+function changerPas() {
+  const c = C; if (!c || c.done) return;
+  const ps = pasPossibles(c.distance, c.bassin, c.nage); if (ps.length < 2) return;
+  // Avant le départ : on fait le tour (25 → 50 → 100…). Pendant : un seul toucher pour le changement courant,
+  // 25 ↔ 50 m (et 100 → 50), sans passer par 100 m en pleine course.
+  const k = ps.indexOf(pasDe(c));
+  const nv = c.T0 == null ? ps[(k + 1) % ps.length] : k > 0 ? ps[k - 1] : ps[1];
+  if (c.T0 == null) { c.pas = nv; c.nageurs.forEach(s => delete s.pts); RT.pad = null; save(); toast(`Temps pris tous les ${nv} m`); renderCourse(); return; }
+  pushUndo({ t: 'pas', avant: c.pas ?? null, pts: c.nageurs.map(s => s.pts ? s.pts.slice() : null) });
+  c.nageurs.forEach(s => { s.pts = ptsDe(c, s).slice(); });   // liste figée avec l'ancien pas…
+  c.nageurs.forEach(s => {                                     // …puis refaite après le dernier mur, pour ceux encore dans l'eau
+    if (!enCourse(c, s)) return;
+    const faits = s.pts.slice(0, s.murs.length);
+    s.pts = [...faits, ...grillePts(c, faits.length ? faits[faits.length - 1] : 0, nv)];
+  });
+  c.pas = nv; RT.pad = null; save(); bip(900, 0.1);
+  toast(`⏱ Temps tous les ${nv} m à partir du prochain mur`, 3500); renderCourse();
 }
 function annuler() {
   const c = C; if (!c) return;
@@ -547,8 +581,9 @@ function annuler() {
   else if (e.t === 'coulee') { if (e.avant == null) delete s.coulees[e.L]; else s.coulees[e.L] = e.avant; }
   else if (e.t === 'cb') { if (e.avant == null) delete s.cb[e.L]; else s.cb[e.L] = e.avant; if (RT.pad && RT.pad.i === e.i) { RT.pad.L = e.L; RT.pad.buf = ''; } }
   else if (e.t === 'statut') s.statut = e.avant;
+  else if (e.t === 'pas') { if (e.avant == null) delete c.pas; else c.pas = e.avant; c.nageurs.forEach((x, k) => { if (e.pts[k]) x.pts = e.pts[k]; else delete x.pts; }); RT.pad = null; }
   save(); toast('Annulé : ' + lib);
-  if (e.t === 'depart') renderCourse(); else majCourse();
+  if (e.t === 'depart' || e.t === 'pas') renderCourse(); else majCourse();
 }
 function finir(auto) {
   const c = C;
@@ -582,13 +617,13 @@ const r2 = v => v == null ? '' : Math.round(v * 100) / 100;
 // split_s et cumul_s = mesurés (taps, ou corrigés dans le récap) ; cumul_recale_s = calé sur le temps officiel (vide sans officiel).
 function lignesCourse(c) {
   const d = new Date(c.T0 || c.createdAt), date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const idCourse = c.idCourse || 'M-' + c.uid, n = nbL(c), rows = [];
+  const idCourse = c.idCourse || 'M-' + c.uid, rows = [];
   c.nageurs.filter(s => !s.exclu).forEach(s => {   // nageur « retiré des données » : jamais envoyé
-    const cum = cumuls(c, s), sp = splits(cum), e = ecart(c, s), rec = cumulsRecales(c, s);
+    const cum = cumuls(c, s), sp = splits(cum), e = ecart(c, s), rec = cumulsRecales(c, s), n = nbP(c, s), P = ptsDe(c, s);
     for (let k = 0; k < n; k++) rows.push({
       date, id_compet: c.idCompet || '', competition: c.competition || '', id_course: idCourse, num_epreuve: c.numEpreuve || '',
       distance: c.distance, nage: c.nage, bassin_m: c.bassin, serie: c.serie || '', couloir: s.couloir,
-      id_nageur: s.id_nageur || '', nom: s.nom, prenom: s.prenom, longueur: (k + 1) * pasDe(c) / c.bassin, nage_longueur: nageL(c, k + 1),
+      id_nageur: s.id_nageur || '', nom: s.nom, prenom: s.prenom, longueur: P[k] / c.bassin, nage_longueur: nageP(c, s, k + 1),
       split_s: r2(sp[k]), cumul_s: r2(cum[k]), cumul_recale_s: e != null ? r2(rec[k]) : '',
       coulee: s.coulees[k + 1] || '', coups_bras: s.cb[k + 1] || '',
       temps_officiel_s: s.officiel ?? '', decalage_s: e != null ? r2(e) : '',
@@ -992,10 +1027,10 @@ function renderCourse() {
   <div class="view">
     <div class="bar">
       <div class="b1"><button class="btn" id="c-home" aria-label="Accueil Compétition">←</button>
-        <div class="titre">${esc(nomCourse(c))}<small>${pasDe(c) === c.bassin ? nbL(c) + ' longueurs' : nbL(c) + ' temps · tous les ' + pasDe(c) + ' m'}</small></div>
+        <div class="titre">${esc(nomCourse(c))}<small>${!pasUnique(c) ? 'temps tous les ' + pasDe(c) + ' m (changé en course)' : pasDe(c) === c.bassin ? nbP(c, c.nageurs[0]) + ' longueurs' : nbP(c, c.nageurs[0]) + ' temps · tous les ' + pasDe(c) + ' m'}</small></div>
         <div class="spacer"></div>
         <div class="clock" id="c-clock">${part ? '' : '0"0'}</div></div>
-      <div class="b2">${part || pasPossibles(c.distance, c.bassin, c.nage).length < 2 ? '' : `<button class="btn" id="c-pas" aria-label="Temps pris tous les">⏱ ${pasDe(c)} m</button>`}<button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
+      <div class="b2">${c.done || pasPossibles(c.distance, c.bassin, c.nage).length < 2 ? '' : `<button class="btn" id="c-pas" aria-label="Temps pris tous les">⏱ ${pasDe(c)} m</button>`}<button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
         ${part ? '<button class="btn" id="c-fin">Terminer</button>' : ''}
         <button class="btn undo" id="c-undo">↶ ANNULER</button></div>
     </div>
@@ -1015,11 +1050,7 @@ function renderCourse() {
   </div>`;
   $('#c-home').onclick = () => { RT.pad = null; view = 'accueil'; render(); };
   $('#c-vue').onclick = ouvrirVue;
-  if ($('#c-pas')) $('#c-pas').onclick = () => {   // avant le départ seulement : 25 → 50 → 100 m…
-    if (c.T0 != null) return;
-    const ps = pasPossibles(c.distance, c.bassin, c.nage), k = ps.indexOf(pasDe(c));
-    c.pas = ps[(k + 1) % ps.length]; RT.pad = null; save(); toast(`Temps pris tous les ${c.pas} m`); renderCourse();
-  };
+  if ($('#c-pas')) $('#c-pas').onclick = changerPas;   // 25 → 50 → 100 m…, avant ou pendant la course (v27)
   bindPress($('#c-undo'), () => annuler());
   if ($('#c-fin')) $('#c-fin').onclick = ouvrirTerminer;
   if ($('#c-go')) bindPress($('#c-go'), t => depart(t));
@@ -1046,12 +1077,11 @@ function carteLigne(c, i) {
 // Place les coulées depuis le mur que le nageur vient de quitter, et la zone mur entre 15 m et le mur d'arrivée.
 function placerLigne(card, c, s) {
   const eau = card.querySelector('.eau'); if (!eau) return;
-  const W = eau.clientWidth, H = eau.clientHeight, m = W / pasDe(c);   // aux 50 m en 25 m : la ligne montre le 50 m déplié
+  const L = lEnCours(c, s);
+  const W = eau.clientWidth, H = eau.clientHeight, m = W / lgP(c, s, L);   // aux 50 m en 25 m : la ligne montre le 50 m déplié
   const bw = Math.max(40, Math.min(64, W * 0.07, (H / 2 - 6) * 1.6)), gap = 4;
   eau.style.setProperty('--bw', bw + 'px');
-  const L = lEnCours(c, s);
-  const lps = pasDe(c) / c.bassin;                           // longueurs par segment
-  const versPlots = lps % 2 === 1 && L % 2 === 0;            // longueurs paires : il revient vers les plots (segment pair = toujours depuis les plots)
+  const versPlots = (debP(c, s, L) / c.bassin) % 2 === 1;   // il a fait un nombre impair de longueurs : il revient vers les plots
   const depGauche = (plots() === 'g') !== versPlots;          // il part du bord gauche de l'écran ?
   let finCoulees = 0;
   [RANG_A, COULEES.filter(v => !RANG_A.includes(v))].forEach(rang => {
@@ -1087,16 +1117,17 @@ function refus(i) { flash(i, 'refus'); }
 // Mise à jour en place (sans redessiner les tuiles : un doigt posé n'est jamais perdu)
 function majCourse() {
   const c = C; if (view !== 'course' || !c) return;
-  const now = Date.now(), n = nbL(c);
+  const now = Date.now();
   c.nageurs.forEach((s, i) => {
     const el = $('#t-' + i); if (!el) return;
+    const n = nbP(c, s);
     const cum = cumuls(c, s), k = s.murs.length, sp = splits(cum);
     const ab = s.statut === 'abandon', f = fini(c, s);
     el.classList.toggle('fini', f && !ab); el.classList.toggle('ab', ab); el.classList.toggle('avant', c.T0 == null);
     const L = lEnCours(c, s), card = el.closest('.card');
     const depGauche = estCote() ? placerLigne(card, c, s) : null;
     const fleche = depGauche == null || f || ab ? '' : depGauche ? ' →' : ' ←';
-    $('.t-len', card).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `${pasDe(c) === c.bassin ? `L${L}/${n}` : `${L * pasDe(c)} m (${L}/${n})`} · ${nageL(c, L)}${fleche}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
+    $('.t-len', card).textContent = ab ? 'Abandon' : f ? `✓ Arrivé${s.statut === 'dsq' ? ' · DSQ' : ''}` : `${enLongueurs(c, s) ? `L${L}/${n}` : `${ptsDe(c, s)[L - 1]} m (${L}/${n})`} · ${nageP(c, s, L)}${fleche}${s.statut === 'dsq' ? ' · DSQ' : ''}`;
     $('.t-split', el).textContent = k ? fmt(sp[k - 1]) : '—';
     $('.t-cum', el).textContent = k ? `${f ? 'final' : 'cumul'} ${fmt(cum[k - 1])}${s.cb[k] ? ' · CB ' + s.cb[k] : ''}` : (c.T0 == null ? (s.engagement ? 'engagé ' + fmt(s.engagement) : 'attend le départ') : 'L1 en cours');
     $('.t-run', el).textContent = c.T0 == null ? '' : f ? '' : ab ? '' : fmt((now - c.T0) / 1000, 1);
@@ -1119,24 +1150,24 @@ setInterval(() => { if (view === 'course') majHorloge(); }, 100);
 function basculerPad(i) {
   const c = C; if (!c || c.done) return;
   if (RT.pad && RT.pad.i === i) RT.pad = null;
-  else RT.pad = { i, L: Math.max(1, Math.min(nbL(c), c.nageurs[i].murs.length)), buf: '' };
+  else RT.pad = { i, L: Math.max(1, Math.min(nbP(c, c.nageurs[i]), c.nageurs[i].murs.length)), buf: '' };
   majCourse(); grille();
 }
 function majPad() {
   const box = $('#c-pad'), c = C, p = RT.pad; if (!box) return;
   if (!p || c.done) { if (!box.hidden) { box.hidden = true; box.innerHTML = ''; box._i = null; } return; }
-  const s = c.nageurs[p.i], n = nbL(c), nageCourante = nageL(c, p.L);
+  const s = c.nageurs[p.i], n = nbP(c, s), nageCourante = nageP(c, s, p.L);
   if (box.hidden || box._i !== p.i) {
     box.hidden = false; box._i = p.i;
     box.innerHTML = `
       <div class="pad-head"><b>CB · C${s.couloir} ${esc(prenom(s))}</b><span id="pad-info"></span><button class="btn" id="pad-x">Fermer</button></div>
-      <div class="pad-lens">${Array.from({ length: n }, (_, k) => `<button class="pad-len" data-len="${k + 1}"><small>${libL(c, k + 1)} ${nageL(c, k + 1)}</small><b></b></button>`).join('')}</div>
+      <div class="pad-lens">${Array.from({ length: n }, (_, k) => `<button class="pad-len" data-len="${k + 1}"><small>${libP(c, s, k + 1)} ${nageP(c, s, k + 1)}</small><b></b></button>`).join('')}</div>
       <div class="pad-keys">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map(d => `<button class="pad-key" data-d="${d}">${d}</button>`).join('')}<button class="pad-key" data-d="del">⌫</button><button class="pad-key go" data-d="ok">✓ 1 chiffre</button></div>`;
     bindPress($('#pad-x'), () => { RT.pad = null; majCourse(); grille(); });
     box.querySelectorAll('.pad-len').forEach(b => bindPress(b, () => { if (!RT.pad) return; RT.pad.L = +b.dataset.len; RT.pad.buf = ''; majCourse(); }));
     box.querySelectorAll('.pad-key').forEach(b => bindPress(b, () => touchePad(b.dataset.d)));
   }
-  $('#pad-info', box).textContent = `${libL(c, p.L)} ${nageCourante} : ${p.buf ? p.buf + '… (2e chiffre, ou ✓ si c\'est ' + p.buf + ')' : '2 chiffres, ou 1 chiffre puis ✓'} · crawl/dos = chaque bras ; brasse/pap = le cycle (ici : ${rappelCB(nageCourante)})`;
+  $('#pad-info', box).textContent = `${libP(c, s, p.L)} ${nageCourante} : ${p.buf ? p.buf + '… (2e chiffre, ou ✓ si c\'est ' + p.buf + ')' : '2 chiffres, ou 1 chiffre puis ✓'} · crawl/dos = chaque bras ; brasse/pap = le cycle (ici : ${rappelCB(nageCourante)})`;
   const ok = box.querySelector('.pad-key.go'); if (ok) ok.classList.toggle('attend', !!p.buf);
   box.querySelectorAll('.pad-len').forEach(b => {
     const L = +b.dataset.len; b.classList.toggle('on', L === p.L);
@@ -1175,7 +1206,7 @@ function fermerLayer() { $('#layer').innerHTML = ''; }
 
 // ---------- Récap (corrigeable à volonté) ----------
 function renderRecap() {
-  const c = C, n = nbL(c);
+  const c = C, n = nbP(c, c.nageurs[0]);
   const sc = $('#app .scroll'), garde = sc && RT.recapUid === c.uid ? sc.scrollTop : 0;   // v25 : l'écran ne remonte plus en haut
   RT.recapUid = c.uid;
   $('#app').innerHTML = `
@@ -1183,7 +1214,7 @@ function renderRecap() {
     <div class="actions"><button class="btn" id="r-home">← Compétition</button>
       ${peutRouvrir(c) ? `<button class="btn" id="r-rouvrir">↶ Annuler le dernier geste (rouvre la course)</button>` : ''}</div>
     <h1>${esc(nomCourse(c))}</h1>
-    <p class="note">${c.endedAt ? 'Terminée le ' + fmtDate(c.endedAt) : ''} · ${pasDe(c) === c.bassin ? n + ' longueurs' : n + ' temps de passage (tous les ' + pasDe(c) + ' m)'}. Corrige un temps de passage (cumul) si un mur a été mal tapé : le split se recalcule. Les taps d'origine restent gardés.</p>
+    <p class="note">${c.endedAt ? 'Terminée le ' + fmtDate(c.endedAt) : ''} · ${!pasUnique(c) ? 'pas changé pendant la course : les distances sont dans chaque tableau' : pasDe(c) === c.bassin ? n + ' longueurs' : n + ' temps de passage (tous les ' + pasDe(c) + ' m)'}. Corrige un temps de passage (cumul) si un mur a été mal tapé : le split se recalcule. Les taps d'origine restent gardés.</p>
     <div class="form"><div class="field"><label for="r-serie">Série</label><input id="r-serie" type="text" value="${esc(c.serie || '')}"></div>
       <div class="field"><label for="r-compet">Compétition</label><input id="r-compet" type="text" value="${esc(c.competition || '')}"></div></div>
     <div class="actions" id="r-etat"></div>
@@ -1225,7 +1256,7 @@ function majEtat(c) {
 // v25 : les calculs d'un nageur (splits, recalé, écart, alertes, statut) se mettent à jour sur place : l'écran ne bouge pas.
 function majBloc(c, i) {
   const s = c.nageurs[i]; if (s.exclu || !$('#nag-' + i)) return;
-  const n = nbL(c), cum = cumuls(c, s), e = ecart(c, s), rec = cumulsRecales(c, s), sp = splits(e != null ? rec : cum), final = cum[n - 1];
+  const n = nbP(c, s), cum = cumuls(c, s), e = ecart(c, s), rec = cumulsRecales(c, s), sp = splits(e != null ? rec : cum), final = cum[n - 1];
   const txt = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
   txt('st-' + i, statut(c, s)); txt('fin-' + i, final != null ? fmt(final) : '—'); txt('ec-' + i, e != null ? fmtEcart(e) : '—');
   txt('thsp-' + i, 'Split' + (e != null ? ' (recalé)' : ''));
@@ -1244,7 +1275,7 @@ function majBloc(c, i) {
 function blocNageur(c, s, i) {
   if (s.exclu) return `<section class="nag exclu" id="nag-${i}"><div class="nag-head"><span class="cl">C${s.couloir}</span>${esc(nomComplet(s))}
       <span class="note">retiré des données : pas envoyé au Sheet</span><button class="btn" data-f="remettre" data-i="${i}">Remettre</button></div></section>`;
-  const n = nbL(c);
+  const n = nbP(c, s);
   const gros = 'font-size:22px;font-weight:700;min-height:48px;display:flex;align-items:center';
   return `<section class="nag" id="nag-${i}">
     <div class="nag-head"><span class="cl">C${s.couloir}</span>${esc(nomComplet(s))}
@@ -1259,9 +1290,9 @@ function blocNageur(c, s, i) {
     </div>
     <div id="al-${i}"></div>
     <div class="tablewrap"><table>
-      <thead><tr><th>${pasDe(c) === c.bassin ? 'Long.' : 'Passage'}</th><th>Nage</th><th id="thsp-${i}">Split</th><th>Cumul mesuré</th><th>Cumul recalé</th><th>Coulée</th><th>CB</th><th></th></tr></thead>
+      <thead><tr><th>${enLongueurs(c, s) ? 'Long.' : 'Passage'}</th><th>Nage</th><th id="thsp-${i}">Split</th><th>Cumul mesuré</th><th>Cumul recalé</th><th>Coulée</th><th>CB</th><th></th></tr></thead>
       <tbody>${Array.from({ length: n }, (_, k) => `<tr>
-        <td>${libL(c, k + 1)}</td><td>${nageL(c, k + 1)}</td>
+        <td>${libP(c, s, k + 1)}</td><td>${nageP(c, s, k + 1)}</td>
         <td id="sp-${i}-${k}"></td>
         <td><input data-f="cumul" data-i="${i}" data-k="${k}" type="text" inputmode="decimal" value="" placeholder="manque" aria-label="Cumul L${k + 1}"></td>
         <td id="rec-${i}-${k}"></td>
@@ -1277,7 +1308,7 @@ function blocNageur(c, s, i) {
 // Toute correction d'une course validée ou envoyée la remet « à valider » (le renvoi remplacera ses lignes dans le Sheet).
 function retouche() { C.retouche = true; delete C.validee; delete C.sentAt; save(); if (view === 'recap') majEtat(C); }
 function editRecap(f, i, k, val, el) {
-  const c = C, s = c.nageurs[i], n = nbL(c);
+  const c = C, s = c.nageurs[i], n = nbP(c, s);
   const remet = () => { if (el && f === 'officiel') el.value = s.officiel != null ? fmtEdit(s.officiel) : ''; else if (el && f === 'cb') el.value = s.cb[k + 1] ?? ''; else majBloc(c, i); };
   if (f === 'remettre') { s.exclu = false; retouche(); renderRecap(); return; }
   if (f === 'statut') s.statut = val || null;
