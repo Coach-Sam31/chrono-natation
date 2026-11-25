@@ -243,7 +243,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="ns" hidden></div>
 
 <script>
-const APP_VERSION = 'v28';
+const APP_VERSION = 'v29';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -519,7 +519,8 @@ function mur(i, t) {
   const s = c.nageurs[i];
   if (c.T0 == null) { refus(i); toast('Touche d\'abord DÉPART, au signal'); return; }
   if (s.statut === 'abandon') { toast(`${prenom(s)} : abandon`); return; }
-  if (fini(c, s)) { toast(`${prenom(s)} a fini`); return; }
+  if (fini(c, s)) { validerChiffre(); toast(`${prenom(s)} a fini`); return; }
+  validerChiffre();
   const prev = s.murs.length ? s.murs[s.murs.length - 1] : c.T0;
   if (t - prev < S_PAR_M * lgP(c, s, s.murs.length + 1) * 1000) { refus(i); bip(220, 0.25); return; } // goutte d'eau : rien d'enregistré
   s.murs.push(t); pushUndo({ t: 'mur', i }); save();
@@ -530,12 +531,13 @@ function mur(i, t) {
 function coulee(i, v) {
   const c = C; if (!c || c.done) return;
   const s = c.nageurs[i]; if (!enCourse(c, s)) return;
+  validerChiffre();
   const L = lEnCours(c, s), avant = s.coulees[L] ?? null;
   if (avant === v) delete s.coulees[L]; else s.coulees[L] = v;   // 2e toucher sur le même = efface
   pushUndo({ t: 'coulee', i, L, avant }); save(); majCourse();
 }
 function cbValeur(v) {
-  const c = C, p = RT.pad; if (!c || c.done || !p) return;
+  const c = C, p = RT.pad; if (!c || (c.done && !saisieFin(c)) || !p) return;
   const s = c.nageurs[p.i], L = p.L, avant = s.cb[L] ?? null;
   if (v == null) delete s.cb[L]; else s.cb[L] = String(Number(v));
   pushUndo({ t: 'cb', i: p.i, L, avant }); save();
@@ -545,6 +547,7 @@ function cbValeur(v) {
 function setStatut(i, v) {
   const c = C; if (!c || c.done) return;
   const s = c.nageurs[i]; if ((s.statut || null) === v) return;
+  validerChiffre();
   pushUndo({ t: 'statut', i, avant: s.statut || null });
   s.statut = v; save();
   if (toutFini(c) && c.T0 != null) { fermerLayer(); finir(true); return; }
@@ -559,6 +562,7 @@ function changerPas() {
   // 25 ↔ 50 m (et 100 → 50), sans passer par 100 m en pleine course.
   const k = ps.indexOf(pasDe(c));
   const nv = c.T0 == null ? ps[(k + 1) % ps.length] : k > 0 ? ps[k - 1] : ps[1];
+  validerChiffre();
   if (c.T0 == null) { c.pas = nv; c.nageurs.forEach(s => delete s.pts); RT.pad = null; save(); toast(`Temps pris tous les ${nv} m`); renderCourse(); return; }
   pushUndo({ t: 'pas', avant: c.pas ?? null, pts: c.nageurs.map(s => s.pts ? s.pts.slice() : null) });
   c.nageurs.forEach(s => { s.pts = ptsDe(c, s).slice(); });   // liste figée avec l'ancien pas…
@@ -572,7 +576,14 @@ function changerPas() {
 }
 function annuler() {
   const c = C; if (!c) return;
-  if (c.done) { if (peutRouvrir(c)) { rouvrir(c); annuler(); } return; }
+  if (RT.pad && RT.pad.buf) { toast(`Annulé : chiffre ${RT.pad.buf}`); RT.pad.buf = ''; majCourse(); return; }
+  if (c.done && saisieFin(c) && c.undo.length && c.undo[c.undo.length - 1].t === 'cb') {   // CB tapé après le dernier mur : la course reste finie
+    const e = c.undo.pop(), s = c.nageurs[e.i];
+    if (e.avant == null) delete s.cb[e.L]; else s.cb[e.L] = e.avant;
+    if (RT.pad && RT.pad.i === e.i) RT.pad.L = e.L;
+    save(); toast('Annulé : ' + libelleGeste(e)); majCourse(); return;
+  }
+  if (c.done) { if (peutRouvrir(c)) { RT.fin = null; rouvrir(c); annuler(); } return; }
   const e = c.undo.pop(); if (!e) { toast('Rien à annuler'); return; }
   const lib = libelleGeste(e);
   const s = e.i != null ? c.nageurs[e.i] : null;
@@ -585,18 +596,42 @@ function annuler() {
   save(); toast('Annulé : ' + lib);
   if (e.t === 'depart' || e.t === 'pas') renderCourse(); else majCourse();
 }
+// v29 (retour des Départementaux : « laisser l'écran affiché quelques secondes de plus pour saisir les CB de la dernière
+// longueur ») : au dernier mur, la course est enregistrée finie tout de suite, mais l'écran Course reste FIN_MS ; le bouton CB
+// reste actif ; le décompte attend tant que le pavé CB est ouvert. « Récap maintenant » / « Rester ici ».
+const FIN_MS = 10000;
+const saisieFin = c => !!c && c.done && !!RT.fin && RT.fin.uid === c.uid && view === 'course';
 function finir(auto) {
   const c = C;
+  validerChiffre();
   c.done = true; c.endedAt = Date.now(); c.finAuto = auto;
   DB.ouvertes = DB.ouvertes.filter(x => x !== c); DB.hist.unshift(c);
-  RT.pad = null; save(); lacherEcran();
+  save(); lacherEcran();
   if (auto) {
-    bip(1400, 0.2); toast('Course terminée ✓');
-    majCourse();
-    setTimeout(() => { if (C === c && c.done && view === 'course') { view = 'recap'; render(); } sauverAuSheet(); }, 1200);
-  } else { view = 'recap'; render(); sauverAuSheet(); }
+    bip(1400, 0.2); toast('Course terminée ✓ · CB de la dernière longueur : touche CB');
+    RT.fin = { uid: c.uid, reste: FIN_MS, vu: Date.now(), reste_ici: false };
+    renderCourse();
+  } else { RT.pad = null; RT.fin = null; view = 'recap'; render(); sauverAuSheet(); }
 }
+function versRecap() {
+  validerChiffre();
+  RT.fin = null; RT.pad = null;
+  if (C && C.done && view === 'course') { view = 'recap'; render(); }
+  sauverAuSheet();
+}
+// Décompte de fin (en pause pendant la saisie CB)
+setInterval(() => {
+  const f = RT.fin; if (!f) return;
+  const now = Date.now(), dt = now - f.vu; f.vu = now;
+  if (!saisieFin(C)) { if (view !== 'course') RT.fin = null; return; }
+  if (!RT.pad && !f.reste_ici) f.reste -= dt;
+  if (f.reste <= 0) { versRecap(); return; }
+  const b = document.getElementById('c-recap');
+  if (b) b.textContent = f.reste_ici ? 'Récap →' : RT.pad ? 'Récap · en pause (CB)' : `Récap · ${Math.ceil(f.reste / 1000)} s`;
+}, 250);
 const peutRouvrir = c => c.done && !c.retouche && !c.validee && !c.sentAt && c.undo.length && Date.now() - (c.endedAt || 0) < ROUVRIR_MS;
+// v29 : un chiffre seul tapé dans le pavé CB est enregistré au geste suivant (mur, coulée, autre nageur ou longueur, fermeture…)
+function validerChiffre() { const p = RT.pad; if (p && p.buf && C && (!C.done || saisieFin(C))) cbValeur(p.buf); }
 
 // ---------- Lien avec le Google Sheet (C2) : onglet Competition, une ligne par longueur et par nageur ----------
 // Même script et même code secret que l'entraînement (code saisi une fois sur l'appareil, écran Entraînement).
@@ -1030,8 +1065,8 @@ function renderCourse() {
         <div class="titre">${esc(nomCourse(c))}<small>${!pasUnique(c) ? 'temps tous les ' + pasDe(c) + ' m (changé en course)' : pasDe(c) === c.bassin ? nbP(c, c.nageurs[0]) + ' longueurs' : nbP(c, c.nageurs[0]) + ' temps · tous les ' + pasDe(c) + ' m'}</small></div>
         <div class="spacer"></div>
         <div class="clock" id="c-clock">${part ? '' : '0"0'}</div></div>
-      <div class="b2">${c.done || pasPossibles(c.distance, c.bassin, c.nage).length < 2 ? '' : `<button class="btn" id="c-pas" aria-label="Temps pris tous les">⏱ ${pasDe(c)} m</button>`}<button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
-        ${part ? '<button class="btn" id="c-fin">Terminer</button>' : ''}
+      <div class="b2">${c.done ? `<button class="btn go" id="c-recap">Récap · ${Math.ceil(((RT.fin && RT.fin.reste) || 0) / 1000)} s</button>${RT.fin && !RT.fin.reste_ici ? '<button class="btn" id="c-rester">Rester ici</button>' : ''}` : ''}${c.done || pasPossibles(c.distance, c.bassin, c.nage).length < 2 ? '' : `<button class="btn" id="c-pas" aria-label="Temps pris tous les">⏱ ${pasDe(c)} m</button>`}<button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
+        ${part && !c.done ? '<button class="btn" id="c-fin">Terminer</button>' : ''}
         <button class="btn undo" id="c-undo">↶ ANNULER</button></div>
     </div>
     ${part || estCote() ? '' : '<button class="depart" id="c-go">DÉPART<small>à taper au signal du starter</small></button>'}
@@ -1048,7 +1083,9 @@ function renderCourse() {
     </div></div>
     <div class="pad" id="c-pad" hidden></div>
   </div>`;
-  $('#c-home').onclick = () => { RT.pad = null; view = 'accueil'; render(); };
+  $('#c-home').onclick = () => { validerChiffre(); RT.pad = null; RT.fin = null; view = 'accueil'; render(); if (c.done) sauverAuSheet(); };
+  if ($('#c-recap')) $('#c-recap').onclick = versRecap;
+  if ($('#c-rester')) $('#c-rester').onclick = () => { if (RT.fin) RT.fin.reste_ici = true; renderCourse(); toast('Écran gardé : « Récap → » quand tu as fini'); };
   $('#c-vue').onclick = ouvrirVue;
   if ($('#c-pas')) $('#c-pas').onclick = changerPas;   // 25 → 50 → 100 m…, avant ou pendant la course (v27)
   bindPress($('#c-undo'), () => annuler());
@@ -1138,7 +1175,7 @@ function majCourse() {
     $('.t-cum', el).textContent = k ? `${f ? 'final' : 'cumul'} ${fmt(cum[k - 1])}${s.cb[k] ? ' · CB ' + s.cb[k] : ''}` : (c.T0 == null ? (s.engagement ? 'engagé ' + fmt(s.engagement) : 'attend le départ') : 'L1 en cours');
     $('.t-run', el).textContent = c.T0 == null ? '' : f ? '' : ab ? '' : fmt((now - c.T0) / 1000, 1);
     card.querySelectorAll('.cou[data-v]').forEach(b => { b.classList.toggle('on', !f && s.coulees[L] === b.dataset.v); b.disabled = !enCourse(c, s) || c.done; if (estCote()) b.hidden = !enCourse(c, s); });
-    const cbb = card.querySelector('.cbb'); cbb.classList.toggle('on', !!RT.pad && RT.pad.i === i); cbb.disabled = c.done;
+    const cbb = card.querySelector('.cbb'); cbb.classList.toggle('on', !!RT.pad && RT.pad.i === i); cbb.disabled = c.done && !saisieFin(c);
   });
   const u = $('#c-undo'); if (u) u.disabled = !c.undo.length && !peutRouvrir(c);
   majPad(); majHorloge();
@@ -1154,14 +1191,15 @@ setInterval(() => { if (view === 'course') majHorloge(); }, 100);
 
 // Pavé CB docké en bas : ne couvre aucune tuile. 2 chiffres = CB de la longueur choisie, puis longueur suivante.
 function basculerPad(i) {
-  const c = C; if (!c || c.done) return;
+  const c = C; if (!c || (c.done && !saisieFin(c))) return;
+  validerChiffre();
   if (RT.pad && RT.pad.i === i) RT.pad = null;
   else RT.pad = { i, L: Math.max(1, Math.min(nbP(c, c.nageurs[i]), c.nageurs[i].murs.length)), buf: '' };
   majCourse(); grille();
 }
 function majPad() {
   const box = $('#c-pad'), c = C, p = RT.pad; if (!box) return;
-  if (!p || c.done) { if (!box.hidden) { box.hidden = true; box.innerHTML = ''; box._i = null; } return; }
+  if (!p || (c.done && !saisieFin(c))) { if (!box.hidden) { box.hidden = true; box.innerHTML = ''; box._i = null; } return; }
   const s = c.nageurs[p.i], n = nbP(c, s), nageCourante = nageP(c, s, p.L);
   if (box.hidden || box._i !== p.i) {
     box.hidden = false; box._i = p.i;
@@ -1169,11 +1207,11 @@ function majPad() {
       <div class="pad-head"><b>CB · C${s.couloir} ${esc(prenom(s))}</b><span id="pad-info"></span><button class="btn" id="pad-x">Fermer</button></div>
       <div class="pad-lens">${Array.from({ length: n }, (_, k) => `<button class="pad-len" data-len="${k + 1}"><small>${libP(c, s, k + 1)} ${nageP(c, s, k + 1)}</small><b></b></button>`).join('')}</div>
       <div class="pad-keys">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map(d => `<button class="pad-key" data-d="${d}">${d}</button>`).join('')}<button class="pad-key" data-d="del">⌫</button><button class="pad-key go" data-d="ok">✓ 1 chiffre</button></div>`;
-    bindPress($('#pad-x'), () => { RT.pad = null; majCourse(); grille(); });
-    box.querySelectorAll('.pad-len').forEach(b => bindPress(b, () => { if (!RT.pad) return; RT.pad.L = +b.dataset.len; RT.pad.buf = ''; majCourse(); }));
+    bindPress($('#pad-x'), () => { validerChiffre(); RT.pad = null; majCourse(); grille(); });
+    box.querySelectorAll('.pad-len').forEach(b => bindPress(b, () => { if (!RT.pad) return; validerChiffre(); RT.pad.L = +b.dataset.len; RT.pad.buf = ''; majCourse(); }));
     box.querySelectorAll('.pad-key').forEach(b => bindPress(b, () => touchePad(b.dataset.d)));
   }
-  $('#pad-info', box).textContent = `${libP(c, s, p.L)} ${nageCourante} : ${p.buf ? p.buf + '… (2e chiffre, ou ✓ si c\'est ' + p.buf + ')' : '2 chiffres, ou 1 chiffre puis ✓'} · crawl/dos = chaque bras ; brasse/pap = le cycle (ici : ${rappelCB(nageCourante)})`;
+  $('#pad-info', box).textContent = `${libP(c, s, p.L)} ${nageCourante} : ${p.buf ? p.buf + '… (2e chiffre, ou ✓ si c\'est ' + p.buf + ' : sinon enregistré au geste suivant)' : '2 chiffres, ou 1 chiffre puis ✓ (ou ton geste suivant)'} · crawl/dos = chaque bras ; brasse/pap = le cycle (ici : ${rappelCB(nageCourante)})`;
   const ok = box.querySelector('.pad-key.go'); if (ok) ok.classList.toggle('attend', !!p.buf);
   box.querySelectorAll('.pad-len').forEach(b => {
     const L = +b.dataset.len; b.classList.toggle('on', L === p.L);
@@ -1382,7 +1420,7 @@ function ouvrirFinale(c0) {
 function render() {
   fermerLayer();
   if ((view === 'course' || view === 'recap') && !C) view = 'accueil';
-  if (view === 'course' && C.done) view = 'recap';
+  if (view === 'course' && C.done && !saisieFin(C)) view = 'recap';
   if (view === 'accueil') renderAccueil();
   else if (view === 'course') renderCourse();
   else renderRecap();
