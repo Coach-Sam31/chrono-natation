@@ -88,6 +88,15 @@ details.dossier { border: 2px solid var(--line); border-radius: 10px; padding: 1
 details.dossier summary { font-family: var(--font-display); font-weight: 700; font-size: 20px; min-height: 40px; cursor: pointer; }
 details.dossier[open] summary { margin-bottom: 10px; }
 details.dossier summary small { font-family: var(--font-body); font-weight: 600; font-size: 14px; color: var(--muted); }
+/* v30 (point 5) : onglets de l'écran Compétition, barre « Retour à la course », jours de l'historique */
+.onglets button { font-size: 19px; }
+.retour-course { position: sticky; top: 0; z-index: 5; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,.18); }
+.retour-course small { display: block; font-family: var(--font-body); font-size: 15px; letter-spacing: 0; text-transform: none; }
+@media (max-width: 600px) { .onglets { gap: 4px; flex-wrap: nowrap; } .onglets button { min-width: 0; flex: 1 1 auto; font-size: 15px; padding: 4px 6px; } .btn.big.retour-course { font-size: 17px; padding: 6px 10px; letter-spacing: .02em; } }
+details.jour-d { margin-top: 6px; }
+details.jour-d > summary { font-family: var(--font-display); font-weight: 700; font-size: 20px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; min-height: 40px; cursor: pointer; }
+details.jour-d > summary small { font-family: var(--font-body); font-size: 14px; text-transform: none; letter-spacing: 0; }
+details.jour-d[open] > summary { margin-bottom: 8px; }
 .nag.exclu { opacity: .65; border-style: dashed; }
 #ns { position: fixed; left: 0; right: 0; top: 0; z-index: 40; background: var(--start); color: var(--start-ink); font-weight: 700; padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px; text-align: center; }
 .fin-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding: 6px 0; }
@@ -243,7 +252,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="ns" hidden></div>
 
 <script>
-const APP_VERSION = 'v29';
+const APP_VERSION = 'v30';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -864,17 +873,29 @@ function blocProgramme() {
   const kP = [...avecSuivis.keys()].find(k => k > dernier && libre(k)) ?? [...avecSuivis.keys()].find(libre);
   const prochaine = kP == null ? null : avecSuivis[kP];
   const nonSuivis = P.lignes.filter(l => !l.suivi), ch = P.changements || [];
+  // v30 (point 5) : la liste s'ouvre sur la course du moment. Ce qui est passé est replié en haut, sauf les 2 dernières
+  // courses nagées ; une course en cours ou préparée n'est jamais repliée. L'ordre reste celui de la compétition.
+  const faitsAvant = [...avecSuivis.keys()].filter(k => etats[k].fait && (kP == null || k < kP));
+  let cut = faitsAvant.length > 2 ? faitsAvant[faitsAvant.length - 2] : 0;
+  const kOuvert = [...avecSuivis.keys()].find(k => etats[k].t === 'en cours' || etats[k].t === 'prête');
+  if (kOuvert != null) cut = Math.min(cut, kOuvert);
   let jour = '';
+  const ligneProg = (g, k) => {
+    const e = etats[k], titreJour = g.jour !== jour ? `<h3 class="jour">${esc(g.jour || '')}</h3>` : ''; jour = g.jour;
+    return `${titreJour}<button class="hist-item prog${g === prochaine || e.t === 'en cours' ? ' live' : ''}${e.fait ? ' fait' : ''}" data-p="${esc(g.id)}">
+        <b><span class="h">${esc(g.heure || '')}</span> ${esc(nomEpreuve(g))} · série ${esc(g.serie)}${g === prochaine ? ' · <span class="next">▶ prochaine</span>' : ''}</b>
+        <span>${g.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}${l.engagement_s ? ' ' + fmt(l.engagement_s) : ''}`).join(' · ')} — ${e.t === 'en cours' ? '<span class="next">en cours</span>' : e.t}</span></button>`;
+  };
+  const passees = avecSuivis.slice(0, cut).map(ligneProg).join('');
+  const nPassees = cut, nNagees = etats.slice(0, cut).filter(e => e.fait).length;
+  jour = '';
+  const suite = avecSuivis.slice(cut).map((g, j) => ligneProg(g, cut + j)).join('');
   return `<h2>Programme · ${esc(P.competition)}</h2>
     ${prochaine ? `<button class="btn go big" data-p="${esc(prochaine.id)}">▶ Prochaine : ${esc(prochaine.heure || '')} ${esc(nomEpreuve(prochaine))} · série ${esc(prochaine.serie)}<small style="display:block;font-family:var(--font-body);font-size:15px;letter-spacing:0;text-transform:none">${prochaine.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}`).join(' · ')}</small></button>` : ''}
     <p class="note">${esc(P.lieu || '')} · ${esc(P.dates || '')} · bassin ${P.bassin} m · ${P.lignes.length} engagements du club, ${P.lignes.filter(l => l.suivi).length} suivis · chargé le ${fmtDate(P.chargeLe)}</p>
     ${ch.length ? `<details class="nons" id="p-ch"><summary>Changé sur liveFFN au dernier chargement (${ch.length}) : les courses nagées n'ont pas bougé</summary><ul class="note">${ch.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}
-    <div class="hist">${avecSuivis.map((g, k) => {
-      const e = etats[k], titreJour = g.jour !== jour ? `<h3 class="jour">${esc(g.jour || '')}</h3>` : ''; jour = g.jour;
-      return `${titreJour}<button class="hist-item prog${g === prochaine ? ' live' : ''}${e.fait ? ' fait' : ''}" data-p="${esc(g.id)}">
-        <b><span class="h">${esc(g.heure || '')}</span> ${esc(nomEpreuve(g))} · série ${esc(g.serie)}${g === prochaine ? ' · <span class="next">▶ prochaine</span>' : ''}</b>
-        <span>${g.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}${l.engagement_s ? ' ' + fmt(l.engagement_s) : ''}`).join(' · ')} — ${e.t}</span></button>`;
-    }).join('')}</div>
+    ${nPassees ? `<details class="nons" id="p-passees"><summary>✓ ${nPassees} course${nPassees > 1 ? 's' : ''} déjà passée${nPassees > 1 ? 's' : ''}${nNagees !== nPassees ? ` (${nNagees} nagée${nNagees > 1 ? 's' : ''})` : ''} : touche pour les voir</summary><div class="hist">${passees}</div></details>` : ''}
+    <div class="hist" id="p-liste">${suite}</div>
     ${avecSuivis.length ? '' : '<p class="note warn">Aucun de tes nageurs reconnu : suis-les ci-dessous.</p>'}
     ${nonSuivis.length ? `<details class="nons"><summary>Autres nageurs du club, non suivis (${nonSuivis.length}) : touche pour suivre</summary>
       <div class="hist">${nonSuivis.map(l => `<button class="hist-item" data-suivre="${P.lignes.indexOf(l)}"><b>+ ${esc(l.nageur)}</b><span>${esc(l.heure || '')} ${esc(nomEpreuve(l))} · série ${esc(l.serie)} · C${l.couloir}</span></button>`).join('')}</div></details>` : ''}
@@ -891,6 +912,21 @@ function lierProgramme() {
 }
 
 // ---------- Accueil ----------
+// v30 (point 5, retour des Départementaux) : écran Compétition en onglets ; l'onglet utilisé en dernier est gardé.
+const ONGLETS = [['prog', 'Programme'], ['hist', 'Historique'], ['main', '+ À la main'], ['regl', 'Réglages']];
+const ongletActif = () => ONGLETS.some(o => o[0] === DB.prefs.onglet) ? DB.prefs.onglet : DB.prog ? 'prog' : 'main';
+// La course partie et pas finie (la plus récente) : tant qu'elle tourne, une barre « Retour à la course » reste en haut
+// de l'écran Compétition et des récaps. Le chrono continue (le départ est une heure, pas un compteur).
+const courseEnCours = () => DB.ouvertes.filter(c => c.T0 != null && !c.done).sort((a, b) => b.T0 - a.T0)[0] || null;
+function barreRetour() {
+  const rc = courseEnCours(); if (!rc) return '';
+  return `<button class="btn go big retour-course" id="retour-course">▶ Retour à la course en cours · <span id="rc-clock" class="num">${fmt((Date.now() - rc.T0) / 1000, 1)}</span>
+    <small>${esc(nomCourse(rc))} · ${rc.nageurs.map(s => `C${s.couloir} ${esc(prenom(s))}`).join(' · ')}</small></button>`;
+}
+function lierRetour() {
+  const b = $('#retour-course'); if (!b) return;
+  b.onclick = () => { const rc = courseEnCours(); if (!rc) { render(); return; } C = rc; view = 'course'; keepAwake(); render(); };
+}
 function formDefaut() {
   return { distance: 100, nage: 'NL', bassin: 25, pas: null, serie: '', competition: DB.prefs.competition || '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
 }
@@ -904,15 +940,12 @@ function optionsNageurs(sel) {
 function renderAccueil() {
   const F = RT.form || (RT.form = formDefaut());
   const lign = c => `${nomCourse(c)} · ${c.nageurs.map(prenom).map(esc).join(', ')}`;
-  $('#app').innerHTML = `
-  <div class="view"><div class="scroll"><div class="panel">
-    <div class="actions"><button class="btn" id="retour">← Entraînement</button></div>
-    <h1>🏁 Compétition</h1>
-    ${horsApp ? `<div class="alerte">⚠ Tu es dans Safari, pas dans l'app installée : les courses enregistrées ici ne sont pas celles de l'app, et Safari peut les effacer. Ouvre plutôt l'icône « Chrono » de l'écran d'accueil.</div>` : ''}
-    ${DB.ouvertes.length ? `<h2>Course ouverte</h2><div class="hist">${DB.ouvertes.map((c, k) => `
+  const og = ongletActif(), rc = courseEnCours(), autres = DB.ouvertes.filter(c => c !== rc);
+  const sOuvertes = autres.length ? `<h2>Course${autres.length > 1 ? 's' : ''} ouverte${autres.length > 1 ? 's' : ''}</h2><div class="hist">${autres.map(c => { const k = DB.ouvertes.indexOf(c); return `
       <div class="hist-row"><button class="hist-item live" data-o="${k}"><b>${c.T0 != null ? '▶ Reprendre' : 'Ouvrir'} · ${lign(c)}</b><span>${c.T0 != null ? 'en cours' : 'pas encore partie'}</span></button>
-      ${c.T0 == null ? `<button class="btn danger" data-del="${k}">Supprimer</button>` : ''}</div>`).join('')}</div>` : ''}
-    ${blocProgramme()}
+      ${c.T0 == null ? `<button class="btn danger" data-del="${k}">Supprimer</button>` : ''}</div>`; }).join('')}</div>` : '';
+  const contenu = og === 'prog' ? sOuvertes + blocProgramme()
+    : og === 'main' ? sOuvertes + `
     <h2>Nouvelle course${DB.prog ? ' à la main' : ''}</h2>
     <div class="field"><span class="lbl">Nage</span><div class="choix" id="f-nage">${NAGES.map(n => `<button data-v="${n}" class="${F.nage === n ? 'on' : ''}">${n}</button>`).join('')}</div></div>
     <div class="field"><span class="lbl">Distance</span><div class="choix" id="f-dist">${DISTANCES.map(d => `<button data-v="${d}" class="${F.distance === d ? 'on' : ''}">${d}</button>`).join('')}</div></div>
@@ -933,21 +966,34 @@ function renderAccueil() {
     ${NAGEURS.length ? '' : '<p class="note">Aucun nageur chargé sur cet appareil (ils se chargent depuis l\'écran Entraînement, avec du réseau) : écris les noms.</p>'}
     <div class="actions">${F.rows.length < 8 ? '<button class="btn" id="f-plus">+ Nageur</button>' : ''}
       <button class="btn go big" id="f-creer">Créer la course</button></div>
+`
+    : og === 'hist' ? `
     ${(() => { const av = aValider(), ae = aEnvoyer(); return (av.length ? `<h2>À valider avant l'export (${av.length})</h2>
       <p class="note">Rien n'est parti au Sheet. Ouvre une course pour vérifier les splits, taper le temps officiel, corriger, puis valide-la depuis son récap, ou toutes d'un coup.</p>
-      <div class="hist">${av.map(c => `<button class="hist-item live" data-h="${DB.hist.indexOf(c)}"><b>${lign(c)}</b><span>${fmtDate(c.endedAt)}${c.nageurs.some(s => s.officiel == null && statut(c, s) === 'ok') ? ' · temps officiel à taper' : ''}</span></button>`).join('')}</div>
+      <details class="nons" id="av-liste"><summary>Voir les ${av.length} course${av.length > 1 ? 's' : ''} à valider</summary><div class="hist">${av.map(c => `<button class="hist-item live" data-h="${DB.hist.indexOf(c)}"><b>${lign(c)}</b><span>${fmtDate(c.endedAt)}${c.nageurs.some(s => s.officiel == null && statut(c, s) === 'ok') ? ' · temps officiel à taper' : ''}</span></button>`).join('')}</div></details>
       <div class="actions"><button class="btn go big" id="valid-all">✓ Tout valider et envoyer (${av.length})</button></div>` : '')
-      + (ae.length ? `<div class="actions"><button class="btn big" id="send-all">Envoyer au Sheet (${ae.length} validée${ae.length > 1 ? 's' : ''} en attente)</button></div>` : '')
-      + (getLS(KEY_SECRET) ? '' : '<p class="note warn">Code secret du Sheet absent sur cet appareil : saisis-le une fois dans l\'écran Entraînement pour pouvoir envoyer les courses.</p>'); })()}
+      + (ae.length ? `<div class="actions"><button class="btn big" id="send-all">Envoyer au Sheet (${ae.length} validée${ae.length > 1 ? 's' : ''} en attente)</button></div>` : ''); })()}
     <h2>Historique</h2>
-    ${DB.hist.length ? dossiersHistorique() : '<p class="note">Les courses terminées arrivent ici, rangées par compétition ; tu peux les rouvrir et les corriger autant que tu veux.</p>'}
+    ${DB.hist.length ? dossiersHistorique() : '<p class="note">Les courses terminées arrivent ici, rangées par compétition et par jour ; tu peux les rouvrir et les corriger autant que tu veux.</p>'}`
+    : `
     <h2>Réglages</h2>
     <div class="actions"><button class="btn" id="f-vue">👁 Vue depuis ta place : ${vueCourte()}</button></div>
     <p class="note">Sauvegarde : chaque geste est enregistré sur l'iPad, avec une copie de secours sur l'iPad ; chaque course nagée est aussi copiée dans le Sheet (onglet Sauvegarde_courses) dès qu'il y a du réseau${DB.sauveAt ? ` — dernière copie au Sheet : ${fmtDate(DB.sauveAt)}` : ''}${(() => { const n = [...DB.ouvertes.filter(c => c.T0 != null), ...DB.hist].filter(c => !c.sauveAt || (c.maj || 0) > c.sauveAt).length; return n ? ` · <b>${n} course${n > 1 ? 's' : ''} pas encore copiée${n > 1 ? 's' : ''}</b>` : ''; })()}. Mémoire utilisée par les courses : ${Math.round((getLS(KEY_COURSES) || '').length / 1024)} Ko.</p>
     <div class="actions"><button class="btn" id="f-restaurer">☁️ Récupérer les courses copiées dans le Sheet</button></div>
-    <p class="note">Version de l'app : ${APP_VERSION} (mode Course, étapes C1 à C3a : programme liveFFN, courses envoyées au Sheet après validation).</p>
+    <p class="note">Version de l'app : ${APP_VERSION} (mode Course : programme liveFFN, courses envoyées au Sheet après validation, écran Compétition en onglets).</p>
+`;
+  $('#app').innerHTML = `
+  <div class="view"><div class="scroll"><div class="panel">
+    ${barreRetour()}
+    <div class="actions"><button class="btn" id="retour">← Entraînement</button></div>
+    <h1>🏁 Compétition</h1>
+    ${horsApp ? `<div class="alerte">⚠ Tu es dans Safari, pas dans l'app installée : les courses enregistrées ici ne sont pas celles de l'app, et Safari peut les effacer. Ouvre plutôt l'icône « Chrono » de l'écran d'accueil.</div>` : ''}
+    ${getLS(KEY_SECRET) ? '' : '<p class="note warn">Code secret du Sheet absent sur cet appareil : saisis-le une fois dans l\'écran Entraînement pour pouvoir envoyer les courses.</p>'}
+    <div class="choix onglets" id="onglets">${ONGLETS.map(([k, t]) => `<button data-onglet="${k}" class="${og === k ? 'on' : ''}">${k === 'hist' ? t + ' · ' + DB.hist.length : t}</button>`).join('')}</div>
+    ${contenu}
   </div></div></div>`;
   const info = () => {
+    if (!$('#f-pas')) return;   // v30 : formulaire seulement dans l'onglet « + À la main »
     const ps = pasPossibles(F.distance, F.bassin, F.nage);
     if (F.pas && !ps.includes(F.pas)) F.pas = null;
     const pasF = F.pas || (ps.includes(pasDefaut(F.distance, F.bassin)) ? pasDefaut(F.distance, F.bassin) : F.bassin);
@@ -964,36 +1010,49 @@ function renderAccueil() {
     $('#app').querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('on', x === b)); info();
   });
   choix('f-nage', 'nage'); choix('f-dist', 'distance', true); choix('f-bassin', 'bassin', true);
-  $('#f-serie').oninput = e => F.serie = e.target.value;
-  $('#f-compet').oninput = e => F.competition = e.target.value;
+  if ($('#f-serie')) $('#f-serie').oninput = e => F.serie = e.target.value;
+  if ($('#f-compet')) $('#f-compet').oninput = e => F.competition = e.target.value;
   if ($('#valid-all')) armed($('#valid-all'), `Confirmer : valider et envoyer ${aValider().length} course${aValider().length > 1 ? 's' : ''}`, async () => { const r = await validerCourses(aValider()); toast(msgValide(r), 4000); render(); });
   if ($('#send-all')) $('#send-all').onclick = async () => { try { const n = await envoyerCourses(aEnvoyer()); toast(`✓ ${n} course${n > 1 ? 's' : ''} envoyée${n > 1 ? 's' : ''} au Sheet`); } catch (e) { toast(e.message, 4000); } render(); };
   $('#app').querySelectorAll('.nrow [data-r]').forEach(el => el.oninput = el.onchange = () => { F.rows[+el.closest('.nrow').dataset.k][el.dataset.r] = el.value; });
   if ($('#f-plus')) $('#f-plus').onclick = () => { F.rows.push({ id: '', libre: '', couloir: '' }); renderAccueil(); };
-  $('#f-creer').onclick = creerCourse;
-  $('#f-vue').onclick = ouvrirVue;
-  $('#f-restaurer').onclick = restaurerDuSheet;
-  lierProgramme();
+  if ($('#f-creer')) $('#f-creer').onclick = creerCourse;
+  if ($('#f-vue')) $('#f-vue').onclick = ouvrirVue;
+  if ($('#f-restaurer')) $('#f-restaurer').onclick = restaurerDuSheet;
+  lierProgramme(); lierRetour();
+  $('#app').querySelectorAll('[data-onglet]').forEach(b => b.onclick = () => { DB.prefs.onglet = b.dataset.onglet; save(); renderAccueil(); const sc = $('#app .scroll'); if (sc) sc.scrollTop = 0; });
   $('#retour').onclick = () => { location.href = 'index.html'; };
   $('#app').querySelectorAll('[data-o]').forEach(b => b.onclick = () => { C = DB.ouvertes[+b.dataset.o]; view = 'course'; if (C.T0 != null) keepAwake(); render(); });
   $('#app').querySelectorAll('[data-del]').forEach(b => armed(b, 'Confirmer', () => {
     const [x] = DB.ouvertes.splice(+b.dataset.del, 1); if (x) (DB.supprimees = DB.supprimees || []).push(x.uid); save(); render(); }));
   $('#app').querySelectorAll('[data-h]').forEach(b => b.onclick = () => { C = DB.hist[+b.dataset.h]; view = 'recap'; render(); });
 }
-// Historique rangé en dossiers, un par compétition (le plus récent ouvert), au lieu d'une longue liste.
+// Historique rangé en dossiers, un par compétition, puis par jour (v30, point 5) : la compétition du programme chargé
+// (sans programme : la plus récente) est ouverte, le jour le plus récent d'abord ; les autres compétitions vont dans Archives.
 function dossiersHistorique() {
-  const par = {};
+  const par = {}, quand = c => c.endedAt || c.createdAt || 0;
   DB.hist.forEach((c, k) => { const n = c.competition || 'Courses sans compétition'; (par[n] = par[n] || []).push([c, k]); });
-  const dossiers = Object.entries(par).sort((a, b) => (b[1][0][0].endedAt || 0) - (a[1][0][0].endedAt || 0));
+  Object.values(par).forEach(l => l.sort((a, b) => quand(b[0]) - quand(a[0])));
+  const dossiers = Object.entries(par).sort((a, b) => quand(b[1][0][0]) - quand(a[1][0][0]));
+  const actuel = DB.prog && par[DB.prog.competition] ? DB.prog.competition : DB.prog ? null : dossiers[0][0];
   const jourDe = ts => new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-  return dossiers.map(([nom, liste], d) => {
-    const jours = [...new Set(liste.map(([c]) => jourDe(c.endedAt)))].reverse(), aVal = liste.filter(([c]) => !c.sentAt).length;
-    return `<details class="dossier"${d === 0 ? ' open' : ''}><summary>📁 ${esc(nom)} <small>· ${jours.join(', ')} · ${liste.length} course${liste.length > 1 ? 's' : ''}${aVal ? ` · ${aVal} pas envoyée${aVal > 1 ? 's' : ''}` : ''}</small></summary>
-      <div class="hist">${liste.map(([c, k]) => {
-        const alerte = c.nageurs.some(s => { const e = ecart(c, s); return e != null && Math.abs(e) > 1; });
-        return `<button class="hist-item" data-h="${k}"><b>${nomCourse(c)} · ${c.nageurs.filter(s => !s.exclu).map(prenom).map(esc).join(', ')}</b><span>${fmtDate(c.endedAt)} · ${etatExport(c)}${alerte ? ' · <span class="warn">écart &gt; 1"</span>' : ''}</span></button>`;
-      }).join('')}</div></details>`;
-  }).join('');
+  const cleJour = ts => { const d = new Date(ts); return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate(); };
+  const nomJour = ts => { const t = new Date(ts).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'short' }); return t.charAt(0).toUpperCase() + t.slice(1); };
+  const item = ([c, k]) => {
+    const alerte = c.nageurs.some(s => { const e = ecart(c, s); return e != null && Math.abs(e) > 1; });
+    return `<button class="hist-item" data-h="${k}"><b>${nomCourse(c)} · ${c.nageurs.filter(s => !s.exclu).map(prenom).map(esc).join(', ')}</b><span>${fmtDate(c.endedAt)} · ${etatExport(c)}${alerte ? ' · <span class="warn">écart &gt; 1"</span>' : ''}</span></button>`;
+  };
+  const dossier = (nom, liste, ouvert) => {
+    const jours = [], aVal = liste.filter(([c]) => !c.sentAt).length;
+    liste.forEach(x => { const j = cleJour(quand(x[0])); let g = jours.find(y => y.j === j); if (!g) jours.push(g = { j, ts: quand(x[0]), l: [] }); g.l.push(x); });
+    const dates = jours.map(g => jourDe(g.ts)).reverse();
+    return `<details class="dossier"${ouvert ? ' open' : ''}><summary>📁 ${esc(nom)} <small>· ${dates.join(', ')} · ${liste.length} course${liste.length > 1 ? 's' : ''}${aVal ? ` · ${aVal} pas envoyée${aVal > 1 ? 's' : ''}` : ''}</small></summary>
+      ${jours.map((g, d) => `<details class="jour-d"${d === 0 ? ' open' : ''}><summary>${nomJour(g.ts)} <small>· ${g.l.length} course${g.l.length > 1 ? 's' : ''}</small></summary><div class="hist">${g.l.map(item).join('')}</div></details>`).join('')}</details>`;
+  };
+  const archives = dossiers.filter(([n]) => n !== actuel);
+  return (actuel ? dossier(actuel, par[actuel], true) : '<p class="note">Aucune course terminée pour la compétition du programme : les anciennes sont dans Archives.</p>')
+    + (archives.length ? `<details class="nons" id="archives"><summary>🗄 Archives · ${archives.length} compétition${archives.length > 1 ? 's' : ''} (${archives.map(([n, l]) => `${esc(n)} ${jourDe(quand(l[0][0]))}`).join(', ')})</summary>
+      ${archives.map(([n, l]) => dossier(n, l, false)).join('')}</details>` : '');
 }
 function creerCourse() {
   const F = RT.form, n = F.distance / F.bassin;
@@ -1187,7 +1246,10 @@ function majHorloge() {
   el.textContent = fmt((Date.now() - c.T0) / 1000, 1);
   c.nageurs.forEach((s, i) => { const r = $('#t-' + i + ' .t-run'); if (r && enCourse(c, s)) r.textContent = fmt((Date.now() - c.T0) / 1000, 1); });
 }
-setInterval(() => { if (view === 'course') majHorloge(); }, 100);
+setInterval(() => {
+  if (view === 'course') { majHorloge(); return; }
+  const el = $('#rc-clock'), rc = el && courseEnCours(); if (rc) el.textContent = fmt((Date.now() - rc.T0) / 1000, 1);
+}, 100);
 
 // Pavé CB docké en bas : ne couvre aucune tuile. 2 chiffres = CB de la longueur choisie, puis longueur suivante.
 function basculerPad(i) {
@@ -1255,6 +1317,7 @@ function renderRecap() {
   RT.recapUid = c.uid;
   $('#app').innerHTML = `
   <div class="view"><div class="scroll"><div class="panel">
+    ${barreRetour()}
     <div class="actions"><button class="btn" id="r-home">← Compétition</button>
       ${peutRouvrir(c) ? `<button class="btn" id="r-rouvrir">↶ Annuler le dernier geste (rouvre la course)</button>` : ''}</div>
     <h1>${esc(nomCourse(c))}</h1>
@@ -1268,6 +1331,7 @@ function renderRecap() {
   majEtat(c);
   c.nageurs.forEach((s, i) => majBloc(c, i));
   if ($('#r-finale')) $('#r-finale').onclick = () => ouvrirFinale(c);
+  lierRetour();
   $('#app').querySelectorAll('[data-x]').forEach(b => armed(b, 'Confirmer : retirer', () => {
     c.nageurs[+b.dataset.x].exclu = true; C = c; retouche(); renderRecap(); toast(`${prenom(c.nageurs[+b.dataset.x])} retiré des données de cette course`);
   }));
