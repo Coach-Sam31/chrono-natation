@@ -243,7 +243,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="ns" hidden></div>
 
 <script>
-const APP_VERSION = 'v27';
+const APP_VERSION = 'v28';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -1083,6 +1083,12 @@ function placerLigne(card, c, s) {
   eau.style.setProperty('--bw', bw + 'px');
   const versPlots = (debP(c, s, L) / c.bassin) % 2 === 1;   // il a fait un nombre impair de longueurs : il revient vers les plots
   const depGauche = (plots() === 'g') !== versPlots;          // il part du bord gauche de l'écran ?
+  // v28 (retour des Départementaux, capture de Sam du 21/11) : le bloc nageur (couloir, prénom, CB) se met du côté d'où il PART,
+  // pour que la zone mur touche toujours le bord de l'écran, côté plots compris. Au mur, le bloc passe sous le doigt qui vient
+  // de taper (CB de la longueur finie à portée). Nageur arrivé : le bloc reste du côté de son arrivée (CB de la dernière longueur).
+  const fin = fini(c, s) || s.statut === 'abandon';
+  const blocGauche = fin ? !depGauche : depGauche;
+  card.style.flexDirection = blocGauche ? 'row' : 'row-reverse';
   let finCoulees = 0;
   [RANG_A, COULEES.filter(v => !RANG_A.includes(v))].forEach(rang => {
     let bord = 2;
