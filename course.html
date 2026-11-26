@@ -259,7 +259,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="ns" hidden></div>
 
 <script>
-const APP_VERSION = 'v31';
+const APP_VERSION = 'v32';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -751,18 +751,28 @@ function coursesProgramme() {
   const P = DB.prog; if (!P) return [];
   const par = {};
   P.lignes.forEach(l => { const k = keyCourse(l); (par[k] = par[k] || { id: k, lignes: [] }).lignes.push(l); });
-  return Object.values(par).map(g => {
+  const series = Object.values(par).map(g => {
     const l = g.lignes[0];
-    return Object.assign(g, { date: l.date, heure: l.heure, jour: l.jour, distance: Number(l.distance), nage: l.nage, sexe: l.sexe, tour: l.tour,
+    return Object.assign(g, { id_compet: String(l.id_compet), date: l.date, heure: l.heure, jour: l.jour, distance: Number(l.distance), nage: l.nage, sexe: l.sexe, tour: l.tour,
       serie: String(l.serie), num_epreuve: l.num_epreuve, suivis: g.lignes.filter(x => x.suivi).sort((a, b) => a.couloir - b.couloir) });
-  }).sort((a, b) => (a.date + a.heure).localeCompare(b.date + b.heure) || a.serie - b.serie);
+  });
+  // v32 : finales (page Programme de liveFFN) des épreuves où nage en série un de tes nageurs suivis. candidats = ces nageurs ;
+  // suivis = ceux que liveFFN donne qualifiés (QFA, QFB…) une fois les résultats des séries en ligne. Couloirs : à toi de les donner.
+  const finales = (P.finales || []).map(f => {
+    const memeEp = l => Number(l.distance) === Number(f.distance) && l.nage === f.nage && (l.sexe || '') === (f.sexe || '') && normTour(l.tour) === 'Séries';
+    const candidats = P.lignes.filter(l => l.suivi && memeEp(l)).filter((l, i, a) => a.findIndex(x => memeNageur(x, l)) === i);
+    return { id: `${f.id_compet}-${f.num_epreuve ? 'E' + f.num_epreuve : f.distance + f.nage + f.sexe}-${String(f.tour).replace(/\s+/g, '')}`, finale: true, lignes: [],
+      id_compet: String(f.id_compet), date: f.date, heure: f.heure, jour: f.jour, distance: Number(f.distance), nage: f.nage, sexe: f.sexe, tour: f.tour, serie: '',
+      num_epreuve: f.num_epreuve, resultats: !!f.resultats, candidats, suivis: candidats.filter(l => (f.qualifies || []).some(q => memeNageur(l, q))) };
+  }).filter(g => g.candidats.length);
+  return [...series, ...finales].sort((a, b) => (a.date + a.heure).localeCompare(b.date + b.heure) || String(a.serie).localeCompare(String(b.serie), 'fr', { numeric: true }));
 }
 // v26 (retour du 22/11 : liveFFN avait recomposé des séries ; après rechargement, les courses nagées réapparaissaient
 // « à venir »). Une course est reliée au programme par la COMPÉTITION + l'ÉPREUVE (distance, nage, sexe, tour) + le NAGEUR,
 // jamais par le n° de série ni par l'heure : si liveFFN change la série ou le couloir, la course nagée reste nagée.
 const normTour = t => t && t !== 'Séries' ? String(t).replace(/\s+/g, ' ').trim() : 'Séries';
 const cleEpC = c => [String(c.idCompet), Number(c.distance), c.nage, c.sexe || '', normTour(c.tour)].join('|');
-const cleEpG = g => [String(g.lignes[0].id_compet), Number(g.distance), g.nage, g.sexe || '', normTour(g.tour)].join('|');
+const cleEpG = g => [String(g.id_compet ?? g.lignes[0].id_compet), Number(g.distance), g.nage, g.sexe || '', normTour(g.tour)].join('|');
 const normNom = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
 const nomDeLigne = l => normNom(String(l.prenom || l.nageur || '') + String(l.nom || ''));
 const memeNageur = (s, l) => (s.id_nageur && l.id_nageur && String(s.id_nageur) === String(l.id_nageur))
@@ -772,6 +782,7 @@ const coursesDe = (g, l) => toutesCourses(DB).filter(c => c.idCompet != null && 
 const parti = c => c.done || c.T0 != null;
 // État d'une ligne du programme : il ne dépend que de ce qui a été chronométré (jamais de l'heure).
 function etatProg(g) {
+  if (g.finale) return etatFinale(g);
   const par = g.suivis.map(l => coursesDe(g, l));
   const faites = par.map(cs => cs.find(parti) || null);   // course partie ou finie, pour chaque nageur suivi
   const enCours = faites.find(c => c && !c.done);
@@ -787,6 +798,22 @@ function etatProg(g) {
   const deja = g.suivis.filter((l, k) => faites[k]);
   return { t: 'à venir' + (deja.length ? ` · déjà nagé : ${deja.map(l => l.prenom || l.nageur).join(', ')}` : ''), fait: false,
     restants: g.suivis.filter((l, k) => !faites[k]) };
+}
+// v32 : une finale du programme est reliée à sa course par compétition + épreuve + tour (jamais par les nageurs, choisis sur place).
+function etatFinale(g) {
+  const cs = toutesCourses(DB).filter(c => c.idCompet != null && cleEpC(c) === cleEpG(g));
+  const enCours = cs.find(c => c.T0 != null && !c.done); if (enCours) return { t: 'en cours', fait: false, c: enCours };
+  const faites = cs.filter(c => c.done);
+  if (faites.length) return { t: faites.some(c => !c.validee && !c.sentAt) ? 'à valider' : faites.some(c => !c.sentAt) ? 'validée · envoi en attente' : 'envoyée ✓', fait: true, c: faites[0] };
+  const prete = cs.find(c => !parti(c)); if (prete) return { t: 'prête', fait: false, c: prete };
+  if (!g.suivis.length && g.resultats) return { t: 'aucun qualifié d\'après liveFFN', fait: false, vide: true };
+  return { t: 'à venir', fait: false };
+}
+// Qui nage : les couloirs d'une course préparée ou nagée ; d'une finale pas encore préparée, les qualifiés (sans couloir).
+function quiProg(g, e, avecEng) {
+  if (e && e.c) return e.c.nageurs.filter(s => !s.exclu).map(s => `C${s.couloir} ${esc(prenom(s))}`).join(' · ');
+  if (g.finale) return g.suivis.length ? 'Qualifiés (liveFFN) : ' + g.suivis.map(l => esc(l.prenom || l.nageur)).join(', ') : g.resultats ? '' : 'Nageurs à choisir';
+  return g.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}${avecEng && l.engagement_s ? ' ' + fmt(l.engagement_s) : ''}`).join(' · ');
 }
 const nomEpreuve = g => `${g.distance} ${g.nage} ${SEXE[g.sexe] || ''}`.trim() + (g.tour && g.tour !== 'Séries' ? ' · ' + g.tour : '');
 async function chargerProgramme(lien) {
@@ -808,11 +835,14 @@ async function chargerProgramme(lien) {
     return x;
   });
   const anciensIds = new Set(coursesProgramme().map(g => g.id));
-  DB.prog = { lien, id_compet: String(r.id_compet), competition: r.competition, lieu: r.lieu, dates: r.dates, bassin: Number(r.bassin_m) || 25, chargeLe: Date.now(), maj: Date.now(), lignes };
+  // v32 : finales renvoyées par le script (un ancien script n'en renvoie pas : on garde celles d'avant)
+  const finales = Array.isArray(r.finales) ? r.finales : (avant && avant.finales) || [];
+  DB.prog = { lien, id_compet: String(r.id_compet), competition: r.competition, lieu: r.lieu, dates: r.dates, bassin: Number(r.bassin_m) || 25, chargeLe: Date.now(), maj: Date.now(), lignes, finales };
   DB.prog.changements = avant ? changementsProgramme(avant, anciensIds) : [];
   DB.prefs.competition = r.competition; save();
   const nCh = DB.prog.changements.length;
-  toast(`✓ ${r.competition} : ${lignes.length} engagements du club, ${lignes.filter(l => l.suivi).length} suivis` + (nCh ? ` · ${nCh} changement${nCh > 1 ? 's' : ''} (voir Programme)` : ''), 5000);
+  const nF = coursesProgramme().filter(g => g.finale).length;
+  toast(`✓ ${r.competition} : ${lignes.length} engagements du club, ${lignes.filter(l => l.suivi).length} suivis` + (nF ? ` · ${nF} finale${nF > 1 ? 's' : ''}` : '') + (nCh ? ` · ${nCh} changement${nCh > 1 ? 's' : ''} (voir Programme)` : ''), 5000);
   if (view === 'accueil') render();
 }
 // v26 : après un rechargement, ce qui a changé sur liveFFN pour tes nageurs suivis. Les courses parties ou nagées ne
@@ -836,7 +866,14 @@ function changementsProgramme(avant, anciensIds) {
   });
   vieux.forEach(a => out.push(`${a.prenom || a.nageur} · ${ep(a)} : plus dans la liste de départ (forfait ?)`));
   // Courses préparées depuis le programme mais pas parties : gardées seulement si leur série est restée la même
-  DB.ouvertes.filter(c => !parti(c) && !(c.undo || []).length && String(c.idCompet) === String(P.id_compet) && (c.deProg || anciensIds.has(c.idCourse))).forEach(c => {
+  // v32 : les finales du programme (nouvelles, qualifiés connus) ; une finale préparée n'est jamais retirée (nageurs choisis sur place)
+  if (Array.isArray(avant.finales)) G.filter(g => g.finale).forEach(g => {
+    const a = avant.finales.find(f => Number(f.distance) === g.distance && f.nage === g.nage && (f.sexe || '') === (g.sexe || '') && f.tour === g.tour);
+    const noms = g.suivis.map(l => l.prenom || l.nageur).join(', '), avantNoms = a ? (a.qualifies || []).filter(q => g.candidats.some(l => memeNageur(l, q))).map(q => q.prenom).join(', ') : '';
+    if (!a) out.push(`${nomEpreuve(g)} : nouvelle finale (${g.heure || '?'})${noms ? ', qualifiés : ' + noms : ''}`);
+    else if (noms !== avantNoms && (noms || avantNoms)) out.push(`${nomEpreuve(g)} : qualifiés d'après liveFFN : ${noms || 'aucun'}`);
+  });
+  DB.ouvertes.filter(c => !parti(c) && !(c.undo || []).length && normTour(c.tour) === 'Séries' && String(c.idCompet) === String(P.id_compet) && (c.deProg || anciensIds.has(c.idCourse))).forEach(c => {
     const g = G.find(x => x.id === c.idCourse);
     const pareil = g && g.suivis.length === c.nageurs.length && g.suivis.every(l => c.nageurs.some(s => memeNageur(s, l) && Number(s.couloir) === Number(l.couloir)));
     if (pareil) return;
@@ -851,6 +888,7 @@ function ouvrirProgramme(id) {
   const g = coursesProgramme().find(x => x.id === id); if (!g) return;
   const e = etatProg(g), deja = e.c;
   if (deja) { C = deja; view = deja.done ? 'recap' : 'course'; if (!deja.done && deja.T0 != null) keepAwake(); render(); return; }
+  if (g.finale) { ouvrirFinale(null, g); return; }   // v32 : qualifiés et couloirs choisis sur place
   const suivis = e.restants || g.suivis;   // un nageur qui a déjà nagé cette épreuve n'est pas remis dans une nouvelle course
   if (!suivis.length) { toast('Aucun nageur suivi dans cette série'); return; }
   const P = DB.prog, n = g.distance / P.bassin;
@@ -875,8 +913,8 @@ function blocProgramme() {
   // v26 : Prochaine = la 1re course pas encore partie APRÈS la dernière course partie ou nagée (ordre du programme).
   // Elle dépend de ce qui a été chronométré, pas de l'heure : une course non chronométrée (autre coach, oubli) ne bloque pas.
   const etats = avecSuivis.map(etatProg);
-  const libre = k => !etats[k].fait && etats[k].t !== 'en cours';
-  let dernier = -1; etats.forEach((e, k) => { if (!libre(k)) dernier = k; });
+  const libre = k => !etats[k].fait && etats[k].t !== 'en cours' && !etats[k].vide;
+  let dernier = -1; etats.forEach((e, k) => { if (e.fait || e.t === 'en cours') dernier = k; });
   const kP = [...avecSuivis.keys()].find(k => k > dernier && libre(k)) ?? [...avecSuivis.keys()].find(libre);
   const prochaine = kP == null ? null : avecSuivis[kP];
   const nonSuivis = P.lignes.filter(l => !l.suivi), ch = P.changements || [];
@@ -889,10 +927,10 @@ function blocProgramme() {
   const jourC = avecSuivis.length ? avecSuivis[kC].jour || '' : '';
   const ligneProg = (g, k) => {
     const e = etats[k], centre = k === kC;
-    return `<button class="hist-item prog${centre ? ' centre' : ''}${g === prochaine || e.t === 'en cours' ? ' live' : ''}${e.fait ? ' fait' : ''}" data-p="${esc(g.id)}">
+    return `<button class="hist-item prog${g.finale ? ' finale' : ''}${centre ? ' centre' : ''}${g === prochaine || e.t === 'en cours' ? ' live' : ''}${e.fait ? ' fait' : ''}" data-p="${esc(g.id)}">
         ${centre ? `<em class="badge">${e.t === 'en cours' ? '● En cours' : g === prochaine ? '▶ Prochaine' : 'Dernière course'}</em>` : ''}
-        <b><span class="h">${esc(g.heure || '')}</span> ${esc(nomEpreuve(g))} · série ${esc(g.serie)}${g === prochaine && !centre ? ' · <span class="next">▶ prochaine</span>' : ''}</b>
-        <span>${g.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}${l.engagement_s ? ' ' + fmt(l.engagement_s) : ''}`).join(' · ')} — ${e.t === 'en cours' ? '<span class="next">en cours</span>' : e.t}</span></button>`;
+        <b><span class="h">${esc(g.heure || '')}</span> ${esc(nomEpreuve(g))}${g.serie ? ' · série ' + esc(g.serie) : ''}${g === prochaine && !centre ? ' · <span class="next">▶ prochaine</span>' : ''}</b>
+        <span>${[quiProg(g, e, true), e.t === 'en cours' ? '<span class="next">en cours</span>' : e.t].filter(Boolean).join(' — ')}</span></button>`;
   };
   const duJour = [...avecSuivis.keys()].filter(k => (avecSuivis[k].jour || '') === jourC);
   const autresJours = [...new Set(avecSuivis.map(g => g.jour || ''))].filter(j => j !== jourC);
@@ -902,7 +940,7 @@ function blocProgramme() {
     ${autresJours.map(j => { const ks = [...avecSuivis.keys()].filter(k => (avecSuivis[k].jour || '') === j);
       return `<details class="nons jour-autre"><summary>${esc(j || 'Autre jour')} · ${ks.length} course${ks.length > 1 ? 's' : ''}</summary><div class="hist">${ks.map(k => ligneProg(avecSuivis[k], k)).join('')}</div></details>`; }).join('')}` : '';
   return `<h2>Programme · ${esc(P.competition)}</h2>
-    ${prochaine ? `<button class="btn go big" data-p="${esc(prochaine.id)}">▶ Prochaine : ${esc(prochaine.heure || '')} ${esc(nomEpreuve(prochaine))} · série ${esc(prochaine.serie)}<small style="display:block;font-family:var(--font-body);font-size:15px;letter-spacing:0;text-transform:none">${prochaine.suivis.map(l => `C${l.couloir} ${esc(l.prenom || l.nageur)}`).join(' · ')}</small></button>` : ''}
+    ${prochaine ? `<button class="btn go big" data-p="${esc(prochaine.id)}">▶ Prochaine : ${esc(prochaine.heure || '')} ${esc(nomEpreuve(prochaine))}${prochaine.serie ? ' · série ' + esc(prochaine.serie) : ''}<small style="display:block;font-family:var(--font-body);font-size:15px;letter-spacing:0;text-transform:none">${quiProg(prochaine, etats[kP])}</small></button>` : ''}
     <p class="note">${esc(P.lieu || '')} · ${esc(P.dates || '')} · bassin ${P.bassin} m · ${P.lignes.length} engagements du club, ${P.lignes.filter(l => l.suivi).length} suivis · chargé le ${fmtDate(P.chargeLe)}</p>
     ${ch.length ? `<details class="nons" id="p-ch"><summary>Changé sur liveFFN au dernier chargement (${ch.length}) : les courses nagées n'ont pas bougé</summary><ul class="note">${ch.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}
     ${carrousel}
@@ -1462,36 +1500,51 @@ function editRecap(f, i, k, val, el) {
 }
 
 // ---------- Finales (v25) : ajoutées à la main en 3 touches, liveFFN ne donnant leurs couloirs qu'après les séries ----------
-function ouvrirFinale(c0) {
-  const meme = c => c.distance === c0.distance && c.nage === c0.nage && (c.sexe || '') === (c0.sexe || '') && (c.pas || c.bassin) && c.bassin === c0.bassin
-    && ((c0.idCompet && c.idCompet === c0.idCompet) || (!c0.idCompet && (c.competition || '') === (c0.competition || '')));
-  const cand = [], vus = {};
-  [c0, ...DB.hist, ...DB.ouvertes].filter(meme).forEach(c => c.nageurs.filter(s => !s.exclu).forEach(s => {
-    const k = s.id_nageur || nomComplet(s); if (vus[k]) return; vus[k] = 1;
-    cand.push({ s, coche: c === c0, couloir: s.couloir });
-  }));
-  let tour = 'Finale A';
+// v32 : aussi depuis une finale du programme (g0) : son nom vient de liveFFN (« Finale B U13 »), les qualifiés d'après liveFFN
+// sont cochés d'avance (à vérifier), le couloir se choisit toujours ici (liveFFN ne le publie pas).
+function ouvrirFinale(c0, g0) {
+  const E = c0 || g0, P = DB.prog, idCompet = c0 ? c0.idCompet : g0.id_compet, bassin = (c0 && c0.bassin) || (P && P.bassin) || 25;
+  const memeEp = x => Number(x.distance) === Number(E.distance) && x.nage === E.nage && (x.sexe || '') === (E.sexe || '');
+  const meme = c => memeEp(c) && c.bassin === bassin
+    && ((idCompet && String(c.idCompet) === String(idCompet)) || (!idCompet && (c.competition || '') === ((c0 && c0.competition) || '')));
+  const finalesProg = idCompet && P && String(P.id_compet) === String(idCompet) ? coursesProgramme().filter(g => g.finale && memeEp(g)) : [];
+  const cand = [];
+  const ajoute = (s, deC0) => { const x = cand.find(y => memeNageur(y.s, s)); if (x) { x.deC0 = x.deC0 || deC0; return; } cand.push({ s, deC0, coche: false, couloir: null }); };
+  if (c0) c0.nageurs.filter(s => !s.exclu).forEach(s => ajoute(s, true));
+  [...DB.hist, ...DB.ouvertes].filter(meme).filter(c => normTour(c.tour) === 'Séries').forEach(c => c.nageurs.filter(s => !s.exclu).forEach(s => ajoute(s, false)));
+  (finalesProg[0] ? finalesProg[0].candidats : []).forEach(l => ajoute({ id_nageur: String(l.id_nageur || ''), nom: String(l.nom || ''), prenom: String(l.prenom || l.nageur || ''), engagement: null }, false));
+  const tours = finalesProg.length ? finalesProg.map(g => g.tour).sort((x, y) => x.localeCompare(y, 'fr')) : ['Finale A', 'Finale B', 'Finale C', 'Barrage'];
+  const qualifie = (x, t) => { const g = finalesProg.find(f => f.tour === t); return !!g && g.suivis.some(l => memeNageur(x.s, l)); };
+  let tour = g0 ? g0.tour : (finalesProg.find(g => g.suivis.some(l => c0.nageurs.some(s => memeNageur(s, l)))) || finalesProg[0] || { tour: 'Finale A' }).tour;
+  const cocher = () => cand.forEach(x => { x.coche = finalesProg.length ? qualifie(x, tour) || (x.deC0 && !finalesProg.some(g => g.suivis.length)) : x.deC0; });
+  cocher();
   const dessine = () => {
     $('#layer').innerHTML = `<div class="overlay" id="ov"><div class="sheet">
-      <h2>+ Finale · ${c0.distance} ${c0.nage}${c0.sexe ? ' ' + (SEXE[c0.sexe] || '') : ''}</h2>
-      <div class="choix">${['Finale A', 'Finale B', 'Finale C', 'Barrage'].map(t => `<button data-t="${t}" class="${t === tour ? 'on' : ''}">${t}</button>`).join('')}</div>
-      <p class="note">Coche les nageurs qualifiés et donne leur couloir de finale.</p>
-      ${cand.map((x, j) => `<div class="fin-row"><button class="btn${x.coche ? ' go' : ''}" data-j="${j}">${x.coche ? '✓' : '+'}</button><b>${esc(nomComplet(x.s))}</b>
-        <select data-c="${j}" aria-label="Couloir de ${esc(prenom(x.s))}">${Array.from({ length: 10 }, (_, k) => `<option value="${k}" ${x.couloir === k ? 'selected' : ''}>C${k}</option>`).join('')}</select></div>`).join('')}
+      <h2>${g0 ? '' : '+ '}Finale · ${E.distance} ${E.nage}${E.sexe ? ' ' + (SEXE[E.sexe] || '') : ''}</h2>
+      ${tours.length > 1 || !g0 ? `<div class="choix">${tours.map(t => `<button data-t="${esc(t)}" class="${t === tour ? 'on' : ''}">${esc(t)}</button>`).join('')}</div>` : `<p><b>${esc(tour)}</b></p>`}
+      <p class="note">Coche les nageurs qualifiés et touche leur couloir de finale.${finalesProg.some(g => g.suivis.length) ? ' Cochés d\'avance : qualifiés d\'après les résultats liveFFN, à vérifier.' : ''}</p>
+      ${cand.map((x, j) => `<div class="fin-row"><button class="btn${x.coche ? ' go' : ''}" data-j="${j}">${x.coche ? '✓' : '+'}</button><b>${esc(nomComplet(x.s))}${qualifie(x, tour) ? ' <small class="note">qualifié·e liveFFN</small>' : ''}</b>
+        <select data-c="${j}" aria-label="Couloir de ${esc(prenom(x.s))}"><option value="">Couloir</option>${Array.from({ length: 10 }, (_, k) => `<option value="${k}" ${x.couloir === k ? 'selected' : ''}>C${k}</option>`).join('')}</select></div>`).join('')}
       <button class="btn go big" id="fi-ok">Créer la finale</button>
       <button class="btn" id="fi-x">Fermer</button>
     </div></div>`;
-    $('#layer').querySelectorAll('[data-t]').forEach(b => b.onclick = () => { tour = b.dataset.t; dessine(); });
+    $('#layer').querySelectorAll('[data-t]').forEach(b => b.onclick = () => { tour = b.dataset.t; cocher(); dessine(); });
     $('#layer').querySelectorAll('[data-j]').forEach(b => b.onclick = () => { cand[+b.dataset.j].coche = !cand[+b.dataset.j].coche; dessine(); });
-    $('#layer').querySelectorAll('[data-c]').forEach(sel => sel.onchange = () => { cand[+sel.dataset.c].couloir = Number(sel.value); });
+    $('#layer').querySelectorAll('[data-c]').forEach(sel => sel.onchange = () => { cand[+sel.dataset.c].couloir = sel.value === '' ? null : Number(sel.value); });
     $('#fi-x').onclick = fermerLayer;
     $('#fi-ok').onclick = () => {
       const pris = cand.filter(x => x.coche).sort((a, b) => a.couloir - b.couloir);
       if (!pris.length) { toast('Coche au moins un nageur'); return; }
+      const sans = pris.find(x => x.couloir == null); if (sans) { toast(`Couloir de ${prenom(sans.s)} ?`); return; }
       if (new Set(pris.map(x => x.couloir)).size !== pris.length) { toast('Deux nageurs dans le même couloir'); return; }
+      const g = finalesProg.find(f => f.tour === tour) || null;
+      if (g) { const e = etatFinale(g); if (e.c) { fermerLayer(); C = e.c; view = e.c.done ? 'recap' : 'course'; render(); toast(`${tour} déjà préparée : rouverte`); return; } }
+      const ps = pasPossibles(E.distance, bassin, E.nage);
       const uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const c = { uid, createdAt: Date.now(), distance: c0.distance, nage: c0.nage, bassin: c0.bassin, pas: pasDe(c0), serie: '', competition: c0.competition || '',
-        idCompet: c0.idCompet, idCourse: `${c0.idCompet || 'M'}-${c0.distance}${c0.nage}${c0.sexe || ''}-${tour.replace(/\s+/g, '')}-${uid}`, numEpreuve: '', sexe: c0.sexe, tour,
+      const c = { uid, createdAt: Date.now(), distance: Number(E.distance), nage: E.nage, bassin, pas: c0 ? pasDe(c0) : ps.includes(pasDefaut(E.distance, bassin)) ? pasDefaut(E.distance, bassin) : bassin,
+        serie: '', competition: c0 ? c0.competition || '' : P.competition, idCompet,
+        idCourse: g ? g.id : `${idCompet || 'M'}-${E.distance}${E.nage}${E.sexe || ''}-${tour.replace(/\s+/g, '')}-${uid}`, deProg: !!g, numEpreuve: (g && g.num_epreuve) || '',
+        sexe: E.sexe, tour, heure: g ? g.heure : undefined, jour: g ? g.jour : undefined,
         nageurs: pris.map(x => ({ id_nageur: x.s.id_nageur || '', nom: x.s.nom, prenom: x.s.prenom, couloir: x.couloir, engagement: x.s.engagement ?? null,
           murs: [], coulees: {}, cb: {}, statut: null, remarque: '', officiel: null, cumuls: null })),
         T0: null, undo: [], done: false };
