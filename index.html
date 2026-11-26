@@ -257,6 +257,7 @@ input, select, textarea { font-size: 16px !important; }
 .appel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
 .appel-row { display: flex; flex-direction: column; gap: 6px; border: 2px solid var(--line); border-radius: 10px; background: var(--surface); padding: 6px; }
 .appel-row.abs { border-color: var(--warn); background: var(--done); }
+.appel-row.nv-row.on { border-color: var(--nage); }
 .appel-nom { flex: 1; min-width: 0; border: 0; background: none; text-align: left; min-height: 56px; display: flex; flex-direction: column; justify-content: center; padding: 4px 8px; }
 .appel-nom b { font-family: var(--font-display); font-size: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .appel-nom span { font-size: 13px; color: var(--muted); }
@@ -306,7 +307,7 @@ td.nf { color: var(--muted); font-style: italic; }
 <div id="layer"></div>
 
 <script>
-const APP_VERSION = 'v34';   // même numéro que course.html (un seul numéro pour toute l'app, depuis la v21)
+const APP_VERSION = 'v35';   // même numéro que course.html (un seul numéro pour toute l'app, depuis la v21)
 const KEY = 'chrono-maquette-v1';            // v10 : une seule série en cours. Reprise au premier lancement de la v11, puis vidée.
 const KEY_LIVE = 'chrono-live-v2';           // toutes les séries ouvertes (prêtes ou en cours)
 const KEY_HIST = 'chrono-maquette-historique-v1';
@@ -319,7 +320,7 @@ const LONG_PRESS_MS = 900, DISPLAY_DELAY_MS = 1000, HOT_BEFORE_MS = 4000;
 
 let LIVE = [];         // séries ouvertes : prêtes ou en cours, toutes sauvegardées à chaque geste
 let S = null;          // série sur laquelle porte le geste en cours (ou série affichée dans le Récap)
-let view = 'setup';    // setup | chrono | recap
+let view = 'setup';    // setup | chrono | recap | appel | nouvelle
 const RT = {};         // par série (uid), jamais sauvegardé : ordre affiché des tuiles, minuteries, départ programmé, bande dépliée
 let undoStack = [];
 let presses = new Map();
@@ -335,7 +336,7 @@ function serie(uid) { return LIVE.find(x => String(x.uid) === String(uid)) || HI
 function started(s) { return s.T0 != null; }
 function tileOf(id) { return tileEls[S.uid + '|' + id]; }
 // Nom court d'une série : « C4-20261112-ANC-G1-P1 » → « ANC-G1-P1 » ; « · p2 » à partir du 2e passage.
-function idCourt(s) { return s.cfg.essai ? 'Essai' : String(s.cfg.idSerie || '').replace(/^.*?-\d{8}-/, '') || String(s.cfg.groupe || 'Série'); }
+function idCourt(s) { const c = String(s.cfg.idSerie || '').replace(/^.*?-\d{8}-/, ''); return s.cfg.essai ? 'Essai' : s.cfg.creeeIci && c ? 'Série ' + c : c || String(s.cfg.groupe || 'Série'); }
 function nomSerie(s) { return idCourt(s) + (s.groupeNo ? ` · gr.${s.groupeNo}` : '') + (s.passage > 1 ? ` · p${s.passage}` : ''); }
 function detailSerie(s) {
   const n = [...new Set(Object.values(s.cfg.nages || {}).filter(Boolean))];
@@ -389,7 +390,9 @@ function purgeHist(force) {
   const limite = Date.now() - 45 * 86400000, jetable = h => h.cfg.essai || h.sentAt;
   let n = 0;
   const gardees = HIST.filter(h => !jetable(h) || ((h.endedAt || 0) > limite && (!force || ++n <= 20)));
-  const change = gardees.length !== HIST.length; HIST = gardees; return change;
+  const change = gardees.length !== HIST.length;
+  if (change) garderModeles(HIST.filter(h => !gardees.includes(h))); // v35 : la série reste à refaire
+  HIST = gardees; return change;
 }
 function loadLive() {
   let l = [];
@@ -504,6 +507,86 @@ function relancer(h) {
   // Groupe d'une série coupée : les groupes relancés d'un même passage repartent ensemble sous le même numéro.
   if (h.lot) { S.lot = h.lot + '>' + (h.passage || 1); S.groupeNo = h.groupeNo; save(); }
   return S;
+}
+// ---------- v35 : refaire une série déjà nagée (demande de Sam, 26/11) ----------
+// Une série nagée se refait telle quelle, un autre jour : plus besoin de la recréer dans Series_pretes.
+// L'appareil en garde un modèle par série (le dernier passage), même quand l'historique allégé l'a retirée (45 jours).
+const KEY_MODELES = 'chrono-modeles';
+const CHAMPS_MODELE = ['uid', 'cfg', 'lanes', 'laneOrder', 'names', 'info', 'absents', 'prevu', 'appelFait', 'lot', 'groupeNo', 'passage', 'nagesRep', 'cyc', 'endedAt'];
+function lireModeles() { try { return JSON.parse(getLS(KEY_MODELES)) || []; } catch (e) { return []; } }
+function modeleDe(h) { return Object.fromEntries(CHAMPS_MODELE.filter(k => h[k] !== undefined).map(k => [k, JSON.parse(JSON.stringify(h[k]))])); }
+// Avant que l'historique allégé ne retire des séries : leur dernier passage reste comme modèle (60 séries au plus).
+function garderModeles(parties) {
+  const m = lireModeles();
+  parties.filter(h => !h.cfg.essai && h.cfg.idSerie).forEach(h => {
+    const k = m.findIndex(x => x.cfg.idSerie === h.cfg.idSerie && (x.passage || 1) === (h.passage || 1) && (x.groupeNo || 0) === (h.groupeNo || 0));
+    const autre = m.find(x => x.cfg.idSerie === h.cfg.idSerie);
+    if (autre && (autre.passage || 1) > (h.passage || 1)) return; // un passage plus récent est déjà gardé
+    if (k >= 0) m[k] = modeleDe(h); else m.push(modeleDe(h));
+  });
+  // Un seul passage par série : le plus récent (avec tous ses groupes)
+  const dernier = {};
+  m.forEach(x => { dernier[x.cfg.idSerie] = Math.max(dernier[x.cfg.idSerie] || 0, x.passage || 1); });
+  const g = m.filter(x => (x.passage || 1) === dernier[x.cfg.idSerie]).sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
+  const ids = [...new Set(g.map(x => x.cfg.idSerie))].slice(0, 60);
+  setLS(KEY_MODELES, JSON.stringify(g.filter(x => ids.includes(x.cfg.idSerie))));
+}
+// Séries à refaire : une entrée par série (le passage le plus récent, tous ses groupes), la plus récente d'abord.
+function seriesARefaire() {
+  const par = {};
+  [...HIST, ...lireModeles()].forEach(h => {
+    if (!h || !h.cfg || h.cfg.essai || !h.cfg.idSerie) return;
+    const id = h.cfg.idSerie, x = par[id] || (par[id] = { id, passage: 0, groupes: [], last: 0 });
+    const p = h.passage || 1;
+    if (p > x.passage) { x.passage = p; x.groupes = []; }
+    if (p === x.passage && !x.groupes.some(y => (y.groupeNo || 0) === (h.groupeNo || 0))) x.groupes.push(h);
+    x.last = Math.max(x.last, h.endedAt || 0);
+  });
+  return Object.values(par).sort((a, b) => b.last - a.last);
+}
+function boutonRefaire(x) {
+  const h = x.groupes[0], c = h.cfg, n = x.groupes.reduce((k, g) => k + g.lanes.flat().length, 0);
+  const ouverte = LIVE.find(s => s.cfg.idSerie === x.id);
+  return `<button class="hist-item refaire-item" data-ref="${esc(x.id)}"><b>${esc(c.groupe)} · ${esc(idCourt(h))} · ${c.nbRep} × ${c.distance} ${esc(nageResume(h))} · départ ${fmtCycle(c.cycle)} · ${n} nageur${n > 1 ? 's' : ''}</b>`
+    + `<span>${ouverte ? (started(ouverte) ? 'en cours' : 'ouverte au bassin') : `dernière fois ${fmtJour(x.last)} · ${x.passage} passage${x.passage > 1 ? 's' : ''}`}</span></button>`;
+}
+function nageResume(h) { const n = [...new Set(Object.values(h.cfg.nages || {}).filter(Boolean))]; return n.length > 1 ? 'spé' : (n[0] || h.cfg.nage || ''); }
+// Rouvre la série au bassin, prête à partir, avec les nageurs du dernier passage : on corrige ensuite (absent, remplacer, ajouter).
+function refaire(id) {
+  const deja = LIVE.find(s => s.cfg.idSerie === id);
+  if (deja) { S = deja; rt().open = true; return { s: deja, deja: true }; }
+  const x = seriesARefaire().find(y => y.id === id); if (!x) return null;
+  let s = null;
+  x.groupes.slice().sort((a, b) => (a.groupeNo || 0) - (b.groupeNo || 0)).forEach(h => { s = relancer(h); if (LIVE.length > 1) rt(s).open = false; }); // elle attend en carte, avec son Départ
+  return { s, deja: false };
+}
+// Remplacer un nageur par un autre avant le départ : même ligne, même place, même nage (sa spé dans une série spé).
+function replaceSwimmer(oldId, newId) {
+  const n = (PLAN && PLAN.nageurs || []).find(x => String(x.id_nageur) === newId);
+  const l = laneOf(oldId);
+  if (S.T0 != null || !n || l < 0 || laneOf(newId) >= 0) return false;
+  pushUndo(`${S.names[oldId]} remplacé`);
+  [S.lanes, S.laneOrder, S.queue].forEach(t => { const k = t[l].indexOf(oldId); if (k >= 0) t[l][k] = newId; });
+  S.order[newId] = S.order[oldId]; S.res[newId] = Array(nb()).fill(null);
+  delete S.order[oldId]; delete S.res[oldId];
+  S.info[newId] = { nom: String(n.nom), prenom: String(n.prenom) };
+  S.names[newId] = n.prenom ? `${n.prenom} ${String(n.nom).charAt(0)}.` : String(n.nom);
+  const spe = String(n.spe || '').split(/[;,\/]/)[0].trim();
+  const nage = estSpe(S) && spe ? spe : nageDe(oldId, 0);
+  S.cfg.nages = Object.assign(S.cfg.nages || {}, { [newId]: nage });
+  if (S.cfg.cibles) S.cfg.cibles[newId] = null; // pas de référence pour lui dans cette série
+  if (S.cfg.codes && S.cfg.codes[oldId]) S.cfg.codes[newId] = S.cfg.codes[oldId];
+  if (S.nagesRep) delete S.nagesRep[newId];
+  if (S.cb) delete S.cb[newId];
+  if (S.rpe) delete S.rpe[newId];
+  // L'appel suit le remplaçant : c'est lui qui est maintenant prévu à cette place.
+  if (S.prevu && S.prevu.places[oldId]) {
+    S.prevu.places[newId] = S.prevu.places[oldId]; delete S.prevu.places[oldId];
+    S.prevu.nages[newId] = nage; S.prevu.cibles[newId] = null;
+    S.appelFait.absents = S.appelFait.absents.filter(x => x !== newId); delete S.appelFait.nages[newId];
+  }
+  S.absents = (S.absents || []).filter(x => x !== newId);
+  syncDisplay(); save(); return true;
 }
 
 // ---------- Chevauchement des répétitions (v13) ----------
@@ -920,7 +1003,7 @@ function tapCarre(id, quoi) {
 function snapshot() {
   const c = S.cfg;
   return JSON.stringify({ res: S.res, order: S.order, queue: S.queue, laneOrder: S.laneOrder, lanes: S.lanes, T0: S.T0, absents: S.absents || [], sortis: S.sortis || [],
-    pauses: S.pauses || [], pause: S.pause || null, cyc: S.cyc || [],
+    pauses: S.pauses || [], pause: S.pause || null, cyc: S.cyc || [], prevu: S.prevu, appelFait: S.appelFait, // v35 : un remplacement annulé remet l'appel comme avant
     p: { nbRep: c.nbRep, cycle: c.cycle, vague: c.vague, distance: c.distance, countReps: c.countReps || [], cibles: c.cibles || {}, perLane: c.perLane } });
 }
 // Chaque action annulable porte un libellé : « Annuler » dit ce qu'il défait (« Léa, arrivée rép. 4 »).
@@ -1076,18 +1159,21 @@ function addSwimmer(id, l) { // avant le départ uniquement
   S.absents = (S.absents || []).filter(x => x !== id);
   syncDisplay(); save();
 }
-function openAdd() {
+function openAdd(remplace) {
   layerUid = S.uid;
+  if (remplace && (S.T0 != null || laneOf(remplace) < 0)) remplace = null;
   const actif = n => n.actif !== false && String(n.actif).toUpperCase() !== 'FALSE';
   const libres = (PLAN && PLAN.nageurs || []).filter(n => actif(n) && laneOf(String(n.id_nageur)) < 0);
   const groupes = [...new Set(libres.map(n => String(n.groupe)))].sort((a, b) => (a === S.cfg.groupe) - (b === S.cfg.groupe) || a.localeCompare(b));
   $('#layer').innerHTML = `
-  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Ajouter un nageur">
-    <h2>Ajouter un nageur</h2>
+  <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="${remplace ? 'Remplacer un nageur' : 'Ajouter un nageur'}">
+    <h2>${remplace ? `Remplacer ${esc(S.names[remplace])}` : 'Ajouter un nageur'}</h2>
     ${libres.length ? `<div class="field"><label for="a-id">Nageur</label><select id="a-id">${groupes.map(g => `<optgroup label="${esc(g)}">${libres.filter(n => String(n.groupe) === g)
       .sort((a, b) => String(a.prenom).localeCompare(String(b.prenom))).map(n => `<option value="${esc(n.id_nageur)}">${esc(n.prenom)} ${esc(n.nom)}</option>`).join('')}</optgroup>`).join('')}</select></div>
-    <div class="row">${S.lanes.map((_, k) => `<button class="btn go" data-add="${k}">→ Ligne ${laneLabel(k)}</button>`).join('')}</div>
-    <p class="note">Il part en dernier dans la ligne choisie, sans temps cible. Appui long sur sa tuile pour le déplacer.</p>`
+    ${remplace ? `<div class="row"><button class="btn go" id="a-rempl">Remplacer</button></div>
+    <p class="note">Il prend la place de ${esc(S.names[remplace])} : même ligne, même ordre de départ, sans temps cible.</p>`
+    : `<div class="row">${S.lanes.map((_, k) => `<button class="btn go" data-add="${k}">→ Ligne ${laneLabel(k)}</button>`).join('')}</div>
+    <p class="note">Il part en dernier dans la ligne choisie, sans temps cible. Appui long sur sa tuile pour le déplacer.</p>`}`
     : '<p class="note">Aucun autre nageur dans la liste. Recharge depuis le Sheet si besoin.</p>'}
     <button class="btn big" id="a-close">Fermer</button>
   </div></div>`;
@@ -1097,6 +1183,10 @@ function openAdd() {
     const id = $('#a-id').value, l = +b.dataset.add;
     addSwimmer(id, l); closeLayer(); renderChrono(); toast(`${S.names[id]} ajouté · ligne ${laneLabel(l)}`);
   });
+  if ($('#a-rempl')) $('#a-rempl').onclick = () => {
+    const id = $('#a-id').value, avant = S.names[remplace];
+    if (replaceSwimmer(remplace, id)) { closeLayer(); renderChrono(); toast(`${avant} → ${S.names[id]} · ↶ Annuler pour revenir`); }
+  };
 }
 function leadRep() { return repsLancees(); }
 
@@ -1233,6 +1323,8 @@ function renderSetup() {
       return `<div class="actions"><button class="btn big" id="appel">📋 Appel de la séance${a.absents.length ? ` · ${a.absents.length} absent${a.absents.length > 1 ? 's' : ''}` : ''}${nn ? ` · ${nn} nage${nn > 1 ? 's' : ''} changée${nn > 1 ? 's' : ''}` : ''}</button></div>
       <p class="note">À faire en arrivant au bord du bassin : absents et spé du jour, notés une seule fois pour toutes les séries.</p>`;
     })() : ''}
+    ${secret && PLAN && (PLAN.nageurs || []).length ? `<div class="actions"><button class="btn big" id="nouv">＋ Nouvelle série</button></div>
+      <p class="note">Une série pas prévue dans le Sheet : tu règles et tu choisis les nageurs ici, au bord du bassin.</p>` : ''}
     <h2>Séries prêtes</h2>
     ${secret ? `
       ${(() => {
@@ -1249,6 +1341,15 @@ function renderSetup() {
         <button class="btn" id="load" style="min-height:40px;padding:6px 12px;margin-left:8px">Actualiser</button></p>`
     : `<p class="note">Code secret du Sheet, à saisir une seule fois sur cet appareil.</p>
       <div class="actions"><input id="f-secret" type="password" autocomplete="off" style="border:2px solid var(--line);border-radius:8px;padding:10px;min-height:48px;-webkit-user-select:text;user-select:text" aria-label="Code secret"><button class="btn go" id="save-secret">Enregistrer</button></div>`}
+
+    ${(() => {
+      const ref = seriesARefaire(); if (!ref.length) return '';
+      const vu = ref.slice(0, 8), plus = ref.slice(8);
+      return `<h2>Refaire une série déjà nagée</h2>
+      <p class="note">Elle rouvre au bassin avec les nageurs de la dernière fois, prête à partir. Avant le départ, appui long sur une tuile : remplacer ou absent ; « + Nageur » pour en ajouter un. Dans le Sheet, c'est un nouveau passage : rien n'est écrasé.</p>
+      <div class="hist">${vu.map(boutonRefaire).join('')}</div>
+      ${plus.length ? `<details class="essai"><summary>Plus anciennes (${plus.length})</summary><div class="hist">${plus.map(boutonRefaire).join('')}</div></details>` : ''}`;
+    })()}
 
     ${aval.length ? `<h2>À valider avant l'export (${aval.length})</h2>
       <p class="note">Rien n'est parti au Sheet. Ouvre une série pour corriger les temps, noter les CB et les RPE, puis valide-la depuis son récap, ou toutes d'un coup.</p>
@@ -1298,6 +1399,11 @@ function renderSetup() {
   };
   if ($('#load')) $('#load').onclick = () => autoChargement(true);
   if ($('#appel')) $('#appel').onclick = ouvrirAppel;
+  if ($('#nouv')) $('#nouv').onclick = ouvrirNouvelle;
+  $('#app').querySelectorAll('.refaire-item').forEach(b => b.onclick = () => {
+    const r = refaire(b.dataset.ref); if (!r) return;
+    view = 'chrono'; render(); toast(r.deja ? `${nomSerie(r.s)} est déjà au bassin` : `${idCourt(r.s)} rouverte au bassin · appui long sur une tuile pour corriger un nageur`, 3500);
+  });
   // À l'ouverture de l'accueil, avec du réseau : mise à jour seule si le dernier chargement date de plus de 5 min
   if (secret && !chargement && navigator.onLine !== false && (!PLAN || Date.now() - PLAN.loadedAt > 5 * 60000)) autoChargement(false);
   if ($('#valid-all')) armed($('#valid-all'), `Confirmer : valider et envoyer ${aval.length} série${aval.length > 1 ? 's' : ''}`, async () => {
@@ -1363,6 +1469,11 @@ function renderChrono() {
   $('#home').onclick = () => { view = 'setup'; render(); };
   if ($('#plus')) $('#plus').onclick = openPlus;
   if ($('#appel')) $('#appel').onclick = ouvrirAppel;
+  if ($('#nouv')) $('#nouv').onclick = ouvrirNouvelle;
+  $('#app').querySelectorAll('.refaire-item').forEach(b => b.onclick = () => {
+    const r = refaire(b.dataset.ref); if (!r) return;
+    view = 'chrono'; render(); toast(r.deja ? `${nomSerie(r.s)} est déjà au bassin` : `${idCourt(r.s)} rouverte au bassin · appui long sur une tuile pour corriger un nageur`, 3500);
+  });
   $('#undo').onclick = undo; // « Terminer » est dans ⚙ et dans le Récap : loin d'« Annuler », qui sert sans cesse
   $('#app').querySelectorAll('[data-open]').forEach(b => b.onclick = () => { const s = serie(b.dataset.open); if (s) { S = s; rt().open = true; renderChrono(); } });
   $('#app').querySelectorAll('[data-go]').forEach(b => b.onclick = () => { const s = serie(b.dataset.go); if (s && !started(s)) { S = s; lancerDepart(Date.now()); } });
@@ -1426,8 +1537,10 @@ function openPlus() {
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" style="width:min(760px,100%)" role="dialog" aria-label="Ajouter une série">
     <h2>Ajouter une série au bassin</h2>
+    ${PLAN && (PLAN.nageurs || []).length ? '<div class="actions"><button class="btn go" id="p-nouv">＋ Nouvelle série</button></div>' : ''}
     ${liste.length ? `<div class="hist">${liste.map(boutonPlan).join('')}</div>` : '<p class="note">Aucune série prête aujourd\'hui ou plus tard. Actualise la liste depuis l\'accueil.</p>'}
     <p class="note">La série s'ajoute en haut de l'écran, prête à partir. Une série déjà terminée repart pour un nouveau passage, sans rien écraser.</p>
+    ${(() => { const ref = seriesARefaire().filter(x => !liste.some(y => y.id === x.id)); return ref.length ? `<details class="essai"><summary>Refaire une série déjà nagée (${ref.length})</summary><div class="hist">${ref.map(boutonRefaire).join('')}</div></details>` : ''; })()}
     <button class="btn big" id="p-close">Fermer</button>
   </div></div>`;
   $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
@@ -1436,6 +1549,11 @@ function openPlus() {
     const deja = LIVE.some(s => s.cfg.idSerie === b.dataset.id), s = startPlanned(b.dataset.id); if (!s) return;
     if (!deja && LIVE.length > 1) rt(s).open = false; // elle attend en carte, sans prendre de place aux séries en cours
     renderChrono(); openPlus(); toast(deja ? `${nomSerie(s)} est déjà au bassin` : `${nomSerie(s)} ajoutée`);
+  });
+  if ($('#p-nouv')) $('#p-nouv').onclick = () => { closeLayer(); ouvrirNouvelle(); };
+  $('#layer').querySelectorAll('.refaire-item').forEach(b => b.onclick = () => {
+    const r = refaire(b.dataset.ref); if (!r) return;
+    renderChrono(); openPlus(); toast(r.deja ? `${nomSerie(r.s)} est déjà au bassin` : `${idCourt(r.s)} ajoutée · prête à partir`);
   });
 }
 
@@ -1826,7 +1944,8 @@ function openMenu(id) {
   $('#layer').innerHTML = `
   <div class="overlay" id="ov"><div class="sheet" role="dialog" aria-label="Actions pour ${esc(S.names[id])}">
     <h2>${esc(S.names[id])} · ligne ${laneLabel(l)}</h2>
-    ${S.T0 == null ? `<button class="btn danger" id="m-abs">Absent (retiré de la série)</button>` : p >= 0 ? `<div class="row">
+    ${S.T0 == null ? `<button class="btn" id="m-rempl">Remplacer par un autre nageur…</button>
+    <button class="btn danger" id="m-abs">Absent (retiré de la série)</button>` : p >= 0 ? `<div class="row">
       <button class="btn" id="m-miss">Manqué (rép. ${p + 1})</button>
       <button class="btn" id="m-nf">Non faite (rép. ${p + 1})</button>
     </div>
@@ -1848,6 +1967,7 @@ function openMenu(id) {
   </div></div>`;
   $('#ov').addEventListener('pointerdown', e => { if (e.target.id === 'ov') closeLayer(); });
   $('#m-close').onclick = closeLayer;
+  if (S.T0 == null) $('#m-rempl').onclick = () => openAdd(id);
   if (S.T0 == null) armed($('#m-abs'), 'Confirmer : absent', () => { markAbsent(id); closeLayer(); buildGrid(); toast(`${S.names[id]} absent · ↶ Annuler pour le remettre`); });
   else if (p >= 0) {
     armed($('#m-out'), "Confirmer : sort de l'eau", () => { withdraw(id); closeLayer(); buildGrid(); toast(`${S.names[id]} sorti de l'eau · les autres gardent leur vague`); });
@@ -2008,6 +2128,117 @@ function renderRecap() {
   }
 }
 
+// ---------- v35 : nouvelle série créée au bord du bassin (demande de Sam, 26/11) ----------
+// À l'entraînement, une série pas prévue dans Series_pretes : réglages + nageurs pris dans la liste Nageurs du Sheet.
+// Elle part au Sheet comme les autres (identifiant « groupe-AAAAMMJJ-14h32 »), et se refait ensuite comme une série prête.
+const KEY_NOUV = 'chrono-nouvelle';          // derniers réglages d'une nouvelle série
+const TYPES = ['', 'AEC', 'AEP', 'ANC', 'ANP', 'ALL100', 'ALL200'];
+let NV = null, retourNouv = 'setup';
+function actifN(n) { return n.actif !== false && String(n.actif).toUpperCase() !== 'FALSE'; }
+function ouvrirNouvelle() {
+  let c = {}; try { c = JSON.parse(getLS(KEY_NOUV)) || {}; } catch (e) {}
+  const groupes = [...new Set(((PLAN && PLAN.nageurs) || []).filter(actifN).map(n => String(n.groupe)))].sort();
+  NV = { c: Object.assign({ distance: 100, nbRep: 8, cycle: 100, vague: 10, bassin: 25, nage: 'NL', code: '', cb: '1;4;8', lignes: 2 }, c), place: {}, seq: [] };
+  if (!groupes.includes(NV.c.groupe)) NV.c.groupe = groupes[0] || '';
+  retourNouv = view === 'chrono' ? 'chrono' : 'setup'; view = 'nouvelle'; render();
+}
+function nvNageurs() { return ((PLAN && PLAN.nageurs) || []).filter(actifN).map(n => ({ id: String(n.id_nageur), groupe: String(n.groupe), n })).sort((a, b) => String(a.n.prenom).localeCompare(String(b.n.prenom))); }
+function nvNom(n) { return n.prenom ? `${n.prenom} ${n.nom}` : String(n.nom); }
+function nvLignes() { return [...Array(NV.c.lignes).keys()].map(l => NV.seq.filter(id => NV.place[id] === l)); }
+function nvPlacer(id, l) { if (l == null) { delete NV.place[id]; NV.seq = NV.seq.filter(x => x !== id); } else { if (NV.place[id] == null) NV.seq.push(id); NV.place[id] = l; } }
+function renderNouvelle() {
+  const c = NV.c, a = appel(), tous = nvNageurs(), groupes = [...new Set(tous.map(x => x.groupe))].sort();
+  const duGroupe = tous.filter(x => x.groupe === c.groupe), autres = tous.filter(x => x.groupe !== c.groupe && NV.place[x.id] == null), places = tous.filter(x => x.groupe !== c.groupe && NV.place[x.id] != null);
+  const prevScroll = ($('#app .scroll') || {}).scrollTop || 0;
+  const carte = x => {
+    const ab = a.absents.includes(x.id), l = NV.place[x.id];
+    return `<div class="appel-row nv-row ${ab ? 'abs' : ''} ${l != null ? 'on' : ''}"><button class="appel-nom" data-nv="${esc(x.id)}" ${ab ? 'disabled' : ''}><b>${esc(nvNom(x.n))}</b><span>${ab ? 'absent (appel)' : l != null ? (k => `ligne ${l + 1} · part ${k}${k === 1 ? 'er' : 'e'}`)(NV.seq.filter(y => NV.place[y] === l).indexOf(x.id) + 1) : 'pas dans la série'}</span></button>`
+      + (ab ? '' : `<div class="appel-nages">${[...Array(c.lignes).keys()].map(k => `<button class="${l === k ? 'on' : ''}" data-nvid="${esc(x.id)}" data-nvl="${k}" aria-label="Ligne ${k + 1}">L${k + 1}</button>`).join('')}</div>`) + '</div>';
+  };
+  const lignes = nvLignes(), nT = NV.seq.length;
+  $('#app').innerHTML = `
+  <div class="view"><div class="scroll"><div class="panel" style="max-width:none">
+    <div class="bar"><h1>Nouvelle série</h1><div class="spacer"></div><button class="btn" id="nv-back">Annuler</button></div>
+    <div class="form">
+      <div class="field"><label for="nv-groupe">Groupe</label><select id="nv-groupe">${groupes.map(g => `<option ${g === c.groupe ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></div>
+      <div class="field"><label for="nv-dist">Distance (m)</label><input id="nv-dist" type="number" inputmode="numeric" value="${c.distance}"></div>
+      <div class="field"><label for="nv-rep">Répétitions</label><input id="nv-rep" type="number" inputmode="numeric" min="1" max="30" value="${c.nbRep}"></div>
+      <div class="field"><label for="nv-nage">Nage</label><select id="nv-nage">${[...NAGES.map(n => [n[0], n[2]]), ['spe', 'Spé (chacun la sienne)']].map(([v, t]) => `<option value="${v}" ${v === c.nage ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label for="nv-cyc">Départ (cycle)</label><input id="nv-cyc" type="text" inputmode="decimal" value="${fmtCycle(c.cycle)}"></div>
+      <div class="field"><label for="nv-vag">Vague</label><select id="nv-vag">${[5, 10, 15, 20].map(v => `<option value="${v}" ${v == c.vague ? 'selected' : ''}>${v}"</option>`).join('')}</select></div>
+      <div class="field"><label for="nv-pool">Bassin</label><select id="nv-pool">${[25, 50].map(v => `<option value="${v}" ${v == c.bassin ? 'selected' : ''}>${v} m</option>`).join('')}</select></div>
+      <div class="field"><label for="nv-cb">Rép. avec coups de bras</label><input id="nv-cb" type="text" inputmode="numeric" value="${esc(c.cb)}"></div>
+      <div class="field"><label for="nv-type">Type</label><select id="nv-type">${TYPES.map(t => `<option value="${t}" ${t === c.code ? 'selected' : ''}>${t || '—'}</option>`).join('')}</select></div>
+      <div class="field"><label for="nv-lignes">Lignes d'eau</label><select id="nv-lignes">${[1, 2, 3, 4].map(v => `<option ${v == c.lignes ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    </div>
+    <p class="note">Départ : 1'40 s'écrit <b>1:40</b>. Coups de bras : par exemple <b>1;4;8</b>, vide pour ne pas compter.</p>
+    <h2>Nageurs · ${nT ? `${nT} dans la série` : 'touche L1, L2… pour placer'}</h2>
+    <p class="note">L'ordre de départ dans une ligne suit l'ordre où tu les places (le 1er placé part en tête). Tu le changes ensuite au bassin, appui long sur une tuile.</p>
+    <div class="actions"><button class="btn" id="nv-tous">Tout le groupe ${esc(c.groupe)} (présents) · ${c.lignes} ligne${c.lignes > 1 ? 's' : ''}</button>${nT ? '<button class="btn" id="nv-vider">Vider</button>' : ''}</div>
+    <div class="appel-grid">${duGroupe.map(carte).join('') || '<p class="note">Aucun nageur dans ce groupe.</p>'}${places.map(carte).join('')}</div>
+    ${autres.length ? `<details class="essai"><summary>Autres groupes (${autres.length})</summary><div class="appel-grid">${autres.map(carte).join('')}</div></details>` : ''}
+    ${nT ? `<p class="note">${lignes.map((ids, l) => `<b>Ligne ${l + 1}</b> : ${ids.length ? ids.map(id => esc(nvNom(tous.find(x => x.id === id).n))).join(', ') : 'vide'}`).join('<br>')}</p>` : ''}
+    <div class="actions"><button class="btn go big" id="nv-ok" ${nT ? '' : 'disabled'}>Préparer la série${nT ? ` · ${nT} nageur${nT > 1 ? 's' : ''}` : ''}</button></div>
+  </div></div></div>`;
+  $('#app .scroll').scrollTop = prevScroll;
+  const champ = (sel, k, f) => { $(sel).onchange = () => { c[k] = f($(sel).value); if (k === 'groupe' || k === 'lignes') { if (k === 'lignes') Object.keys(NV.place).forEach(id => { if (NV.place[id] >= c.lignes) nvPlacer(id, c.lignes - 1); }); renderNouvelle(); } }; };
+  champ('#nv-groupe', 'groupe', String); champ('#nv-nage', 'nage', String); champ('#nv-type', 'code', String); champ('#nv-cb', 'cb', String);
+  champ('#nv-dist', 'distance', v => parseInt(v, 10) || 100); champ('#nv-rep', 'nbRep', v => Math.max(1, Math.min(30, parseInt(v, 10) || 1)));
+  champ('#nv-vag', 'vague', Number); champ('#nv-pool', 'bassin', Number); champ('#nv-lignes', 'lignes', Number);
+  $('#nv-cyc').onchange = () => { const v = parseTime($('#nv-cyc').value); if (v) c.cycle = v; else toast('Départ illisible : écris par exemple 1:40'); };
+  $('#nv-back').onclick = () => { NV = null; view = retourNouv === 'chrono' && LIVE.length ? 'chrono' : 'setup'; render(); };
+  $('#app').querySelectorAll('[data-nv]').forEach(b => b.onclick = () => {
+    // Toucher le nom : le place dans la ligne la moins remplie, ou le retire
+    const id = b.dataset.nv;
+    if (NV.place[id] != null) nvPlacer(id, null);
+    else { const ls = nvLignes(); nvPlacer(id, ls.indexOf(ls.reduce((m, x) => x.length < m.length ? x : m))); }
+    renderNouvelle();
+  });
+  $('#app').querySelectorAll('[data-nvid]').forEach(b => b.onclick = () => { const id = b.dataset.nvid, l = +b.dataset.nvl; nvPlacer(id, NV.place[id] === l ? null : l); renderNouvelle(); });
+  $('#nv-tous').onclick = () => {
+    const libres = duGroupe.filter(x => !a.absents.includes(x.id) && NV.place[x.id] == null);
+    // Répartis à la suite : les premiers en ligne 1, puis ligne 2…, autant que possible le même nombre par ligne
+    const total = NV.seq.length + libres.length, par = Math.ceil(total / c.lignes);
+    libres.forEach(x => { const ls = nvLignes(), l = ls.findIndex(y => y.length < par); nvPlacer(x.id, l < 0 ? c.lignes - 1 : l); });
+    renderNouvelle();
+  };
+  if ($('#nv-vider')) $('#nv-vider').onclick = () => { NV.place = {}; NV.seq = []; renderNouvelle(); };
+  $('#nv-ok').onclick = () => {
+    const cycle = parseTime($('#nv-cyc').value);
+    if (!cycle) { toast('Départ illisible : écris par exemple 1:40'); return; }
+    c.cycle = cycle;
+    const s = creerNouvelle(); if (!s) return;
+    NV = null; view = 'chrono'; render(); toast(`${nomSerie(s)} prête au bassin`);
+  };
+}
+function creerNouvelle() {
+  const c = NV.c, tous = Object.fromEntries(nvNageurs().map(x => [x.id, x.n]));
+  const lanes = nvLignes().filter(l => l.length); if (!lanes.length) return null;
+  const d = new Date(), jj = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  let suf = `${d.getHours()}h${String(d.getMinutes()).padStart(2, '0')}`, k = 1;
+  const pris = id => [...LIVE, ...HIST, ...lireModeles()].some(x => x.cfg && x.cfg.idSerie === id) || ((PLAN && PLAN.series) || []).some(r => String(r.id_serie) === id);
+  const base = `${c.groupe || 'S'}-${jj}-`;
+  while (pris(base + suf + (k > 1 ? String.fromCharCode(96 + k) : ''))) k++;
+  const idSerie = base + suf + (k > 1 ? String.fromCharCode(96 + k) : '');
+  const names = {}, info = {}, nages = {}, ids = lanes.flat();
+  ids.forEach(i => {
+    const n = tous[i];
+    info[i] = { nom: String(n.nom), prenom: String(n.prenom) };
+    names[i] = n.prenom ? `${n.prenom} ${String(n.nom).charAt(0)}.` : String(n.nom);
+    nages[i] = c.nage === 'spe' ? (String(n.spe || '').split(/[;,\/]/)[0].trim() || 'NL') : c.nage;
+  });
+  const countReps = [...new Set(String(c.cb || '').split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= c.nbRep))].sort((a, b) => a - b);
+  const s = buildSeries({
+    distance: c.distance, nbRep: c.nbRep, cycle: c.cycle, vague: c.vague, bassin: c.bassin, countReps,
+    lanes: lanes.length, perLane: Math.max(...lanes.map(l => l.length)),
+    nage: c.nage === 'spe' ? '' : c.nage, groupe: c.groupe, idSerie, cibles: {}, nages, codes: {}, code: c.code, laneNums: lanes.map((_, l) => l + 1), creeeIci: true
+  }, lanes, names, info);
+  if (LIVE.length > 1) rt(s).open = false;
+  noterPrevu(s); appliquerAppel(s); S = s; save();
+  const garder = Object.assign({}, c); setLS(KEY_NOUV, JSON.stringify(garder));
+  return s;
+}
+
 // ---------- Écran Appel de la séance ----------
 // Les nageurs des séries du jour (séries prêtes du Sheet datées d'aujourd'hui + séries ouvertes au bassin), par groupe.
 let retourAppel = 'setup';
@@ -2071,6 +2302,7 @@ function renderAppel() {
 function render() {
   if (view === 'recap' && !S) view = LIVE.length ? 'chrono' : 'setup';
   if (view === 'appel') { renderAppel(); return; }
+  if (view === 'nouvelle') { if (NV) renderNouvelle(); else { view = 'setup'; renderSetup(); } return; }
   if (view === 'chrono' && !LIVE.length && !recentes().length) view = 'setup';
   if (view === 'setup') renderSetup();
   else if (view === 'chrono') renderChrono();
