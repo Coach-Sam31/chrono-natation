@@ -259,7 +259,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 <div id="ns" hidden></div>
 
 <script>
-const APP_VERSION = 'v33';
+const APP_VERSION = 'v34';
 const KEY_COURSES = 'chrono-courses';   // { ouvertes: [course], hist: [course], prefs: { vue } } — à part des séries d'entraînement
 const KEY_PLAN = 'chrono-plan';         // lecture seule : nageurs chargés par l'entraînement
 const KEY_SON = 'chrono-son';           // lecture seule : son réglé dans l'entraînement
@@ -635,15 +635,39 @@ function versRecap() {
   if (C && C.done && view === 'course') { view = 'recap'; render(); }
   sauverAuSheet();
 }
+// v34 (C3b, 2e partie) : enchaînement. À la fin des 10 s, la ▶ Prochaine du programme s'ouvre, prête avec son DÉPART ;
+// le récap se fait au calme (bandeau « ✓ Course précédente : récap »). Sans course suivante : le récap, comme avant.
+// Réglage « En fin de course » (Réglages). Une finale pas encore préparée (nageurs et couloirs à choisir) : le récap.
+function prochaineApres() {
+  const G = coursesProgramme().filter(g => g.suivis.length || g.finale || (g.disparus || []).length), E = G.map(etatProg);
+  let d = -1; E.forEach((e, k) => { if (e.fait || e.t === 'en cours') d = k; });
+  const k = [...G.keys()].find(k => k > d && !E[k].fait && E[k].t !== 'en cours' && !E[k].vide);
+  return k == null ? null : { g: G[k], e: E[k] };
+}
+function suivanteDe(c) {
+  if (DB.prefs.enchainer === false || !c || !DB.prog || c.idCompet == null || String(c.idCompet) !== String(DB.prog.id_compet)) return null;
+  const p = prochaineApres(); if (!p || (p.e.c && parti(p.e.c)) || (p.g.finale && !p.e.c)) return null;
+  return p.g;
+}
+function finFenetre() { const g = suivanteDe(C); if (g) versSuivante(C, g); else versRecap(); }
+function versSuivante(prev, g) {
+  validerChiffre();
+  RT.fin = null; RT.pad = null; RT.precedente = prev.uid;
+  sauverAuSheet();
+  ouvrirProgramme(g.id);
+  if (C === prev) { RT.precedente = null; versRecap(); return; }
+  keepAwake(); toast(`▶ ${nomCourse(C)} : prête pour le DÉPART`, 3000);
+}
 // Décompte de fin (en pause pendant la saisie CB)
 setInterval(() => {
   const f = RT.fin; if (!f) return;
   const now = Date.now(), dt = now - f.vu; f.vu = now;
   if (!saisieFin(C)) { if (view !== 'course') RT.fin = null; return; }
   if (!RT.pad && !f.reste_ici) f.reste -= dt;
-  if (f.reste <= 0) { versRecap(); return; }
-  const b = document.getElementById('c-recap');
-  if (b) b.textContent = f.reste_ici ? 'Récap →' : RT.pad ? 'Récap · en pause (CB)' : `Récap · ${Math.ceil(f.reste / 1000)} s`;
+  if (f.reste <= 0) { finFenetre(); return; }
+  const n = f.reste_ici ? '→' : RT.pad ? '· en pause (CB)' : `· ${Math.ceil(f.reste / 1000)} s`;
+  const bs = document.getElementById('c-suiv'), b = document.getElementById('c-recap');
+  if (bs) bs.textContent = `▶ Course suivante ${n}`; else if (b) b.textContent = `Récap ${n}`;
 }, 250);
 const peutRouvrir = c => c.done && !c.retouche && !c.validee && !c.sentAt && c.undo.length && Date.now() - (c.endedAt || 0) < ROUVRIR_MS;
 // v29 : un chiffre seul tapé dans le pavé CB est enregistré au geste suivant (mur, coulée, autre nageur ou longueur, fermeture…)
@@ -1015,14 +1039,17 @@ const ongletActif = () => ONGLETS.some(o => o[0] === DB.prefs.onglet) ? DB.prefs
 // La course partie et pas finie (la plus récente) : tant qu'elle tourne, une barre « Retour à la course » reste en haut
 // de l'écran Compétition et des récaps. Le chrono continue (le départ est une heure, pas un compteur).
 const courseEnCours = () => DB.ouvertes.filter(c => c.T0 != null && !c.done).sort((a, b) => b.T0 - a.T0)[0] || null;
+// v34 : sans course en cours, la course suivante préparée par l'enchaînement (depuis son bandeau « Course précédente »)
+const courseSuivante = () => { const c = RT.suivante && DB.ouvertes.find(x => x.uid === RT.suivante && x.T0 == null); if (!c) RT.suivante = null; return c || null; };
 function barreRetour() {
-  const rc = courseEnCours(); if (!rc) return '';
+  const rc = courseEnCours();
+  if (!rc) { const cs = courseSuivante(); return cs ? `<button class="btn go big retour-course" id="retour-course">▶ Retour à la course suivante<small>${esc(nomCourse(cs))} · ${cs.nageurs.map(s => `C${s.couloir} ${esc(prenom(s))}`).join(' · ')} · prête pour le DÉPART</small></button>` : ''; }
   return `<button class="btn go big retour-course" id="retour-course">▶ Retour à la course en cours · <span id="rc-clock" class="num">${fmt((Date.now() - rc.T0) / 1000, 1)}</span>
     <small>${esc(nomCourse(rc))} · ${rc.nageurs.map(s => `C${s.couloir} ${esc(prenom(s))}`).join(' · ')}</small></button>`;
 }
 function lierRetour() {
   const b = $('#retour-course'); if (!b) return;
-  b.onclick = () => { const rc = courseEnCours(); if (!rc) { render(); return; } C = rc; view = 'course'; keepAwake(); render(); };
+  b.onclick = () => { const rc = courseEnCours() || courseSuivante(); if (!rc) { render(); return; } C = rc; view = 'course'; keepAwake(); render(); };
 }
 function formDefaut() {
   return { distance: 100, nage: 'NL', bassin: 25, pas: null, serie: '', competition: DB.prefs.competition || '', rows: Array.from({ length: 4 }, () => ({ id: '', libre: '', couloir: '' })) };
@@ -1075,6 +1102,7 @@ function renderAccueil() {
     : `
     <h2>Réglages</h2>
     <div class="actions"><button class="btn" id="f-vue">👁 Vue depuis ta place : ${vueCourte()}</button></div>
+    <div class="actions"><button class="btn" id="f-ench">▶ En fin de course : ${DB.prefs.enchainer === false ? 'ouvrir le récap' : 'passer à la course suivante du programme'}</button></div>
     <p class="note">Sauvegarde : chaque geste est enregistré sur l'iPad, avec une copie de secours sur l'iPad ; chaque course nagée est aussi copiée dans le Sheet (onglet Sauvegarde_courses) dès qu'il y a du réseau${DB.sauveAt ? ` — dernière copie au Sheet : ${fmtDate(DB.sauveAt)}` : ''}${(() => { const n = [...DB.ouvertes.filter(c => c.T0 != null), ...DB.hist].filter(c => !c.sauveAt || (c.maj || 0) > c.sauveAt).length; return n ? ` · <b>${n} course${n > 1 ? 's' : ''} pas encore copiée${n > 1 ? 's' : ''}</b>` : ''; })()}. Mémoire utilisée par les courses : ${Math.round((getLS(KEY_COURSES) || '').length / 1024)} Ko.</p>
     <div class="actions"><button class="btn" id="f-restaurer">☁️ Récupérer les courses copiées dans le Sheet</button></div>
     <p class="note">Version de l'app : ${APP_VERSION} (mode Course : programme liveFFN, courses envoyées au Sheet après validation, écran Compétition en onglets).</p>
@@ -1115,6 +1143,7 @@ function renderAccueil() {
   if ($('#f-plus')) $('#f-plus').onclick = () => { F.rows.push({ id: '', libre: '', couloir: '' }); renderAccueil(); };
   if ($('#f-creer')) $('#f-creer').onclick = creerCourse;
   if ($('#f-vue')) $('#f-vue').onclick = ouvrirVue;
+  if ($('#f-ench')) $('#f-ench').onclick = () => { DB.prefs.enchainer = DB.prefs.enchainer === false; save(); renderAccueil(); toast(DB.prefs.enchainer ? 'Fin de course : la course suivante du programme s\'ouvre' : 'Fin de course : le récap s\'ouvre'); };
   if ($('#f-restaurer')) $('#f-restaurer').onclick = restaurerDuSheet;
   lierProgramme(); lierRetour();
   $('#app').querySelectorAll('[data-onglet]').forEach(b => b.onclick = () => { DB.prefs.onglet = b.dataset.onglet; save(); renderAccueil(); const sc = $('#app .scroll'); if (sc) sc.scrollTop = 0; });
@@ -1221,7 +1250,8 @@ function renderCourse() {
         <div class="titre">${esc(nomCourse(c))}<small>${!pasUnique(c) ? 'temps tous les ' + pasDe(c) + ' m (changé en course)' : pasDe(c) === c.bassin ? nbP(c, c.nageurs[0]) + ' longueurs' : nbP(c, c.nageurs[0]) + ' temps · tous les ' + pasDe(c) + ' m'}</small></div>
         <div class="spacer"></div>
         <div class="clock" id="c-clock">${part ? '' : '0"0'}</div></div>
-      <div class="b2">${c.done ? `<button class="btn go" id="c-recap">Récap · ${Math.ceil(((RT.fin && RT.fin.reste) || 0) / 1000)} s</button>${RT.fin && !RT.fin.reste_ici ? '<button class="btn" id="c-rester">Rester ici</button>' : ''}` : ''}${c.done || pasPossibles(c.distance, c.bassin, c.nage).length < 2 ? '' : `<button class="btn" id="c-pas" aria-label="Temps pris tous les">⏱ ${pasDe(c)} m</button>`}${part || c.done ? '' : '<button class="btn" id="c-nag">✎ Nageurs</button>'}<button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
+      <div class="b2">${c.done ? (suivanteDe(c) ? `<button class="btn go" id="c-suiv">▶ Course suivante · ${Math.ceil(((RT.fin && RT.fin.reste) || 0) / 1000)} s</button><button class="btn" id="c-recap">Récap</button>`
+        : `<button class="btn go" id="c-recap">Récap · ${Math.ceil(((RT.fin && RT.fin.reste) || 0) / 1000)} s</button>`) + (RT.fin && !RT.fin.reste_ici ? '<button class="btn" id="c-rester">Rester ici</button>' : '') : ''}${!part && RT.precedente && RT.precedente !== c.uid && DB.hist.some(x => x.uid === RT.precedente) ? '<button class="btn" id="c-prec" aria-label="Récap de la course précédente">✓<span class="long"> Course précédente :</span> récap</button>' : ''}${c.done || pasPossibles(c.distance, c.bassin, c.nage).length < 2 ? '' : `<button class="btn" id="c-pas" aria-label="Temps pris tous les">⏱ ${pasDe(c)} m</button>`}${part || c.done ? '' : '<button class="btn" id="c-nag">✎ Nageurs</button>'}<button class="btn" id="c-vue" aria-label="Vue depuis ta place">👁<span class="long"> ${vueCourte()}</span></button>
         ${part && !c.done ? '<button class="btn" id="c-fin">Terminer</button>' : ''}
         <button class="btn undo" id="c-undo">↶ ANNULER</button></div>
     </div>
@@ -1241,7 +1271,9 @@ function renderCourse() {
   </div>`;
   $('#c-home').onclick = () => { validerChiffre(); RT.pad = null; RT.fin = null; view = 'accueil'; render(); if (c.done) sauverAuSheet(); };
   if ($('#c-recap')) $('#c-recap').onclick = versRecap;
-  if ($('#c-rester')) $('#c-rester').onclick = () => { if (RT.fin) RT.fin.reste_ici = true; renderCourse(); toast('Écran gardé : « Récap → » quand tu as fini'); };
+  if ($('#c-suiv')) $('#c-suiv').onclick = () => { const g = suivanteDe(c); if (g) versSuivante(c, g); else versRecap(); };
+  if ($('#c-prec')) $('#c-prec').onclick = () => { const p = DB.hist.find(x => x.uid === RT.precedente); if (!p) return; RT.suivante = c.uid; C = p; view = 'recap'; render(); };
+  if ($('#c-rester')) $('#c-rester').onclick = () => { if (RT.fin) RT.fin.reste_ici = true; renderCourse(); toast(suivanteDe(c) ? 'Écran gardé : « ▶ Course suivante → » ou « Récap » quand tu as fini' : 'Écran gardé : « Récap → » quand tu as fini'); };
   $('#c-vue').onclick = ouvrirVue;
   if ($('#c-nag')) $('#c-nag').onclick = () => ouvrirNageurs(c);
   if ($('#c-pas')) $('#c-pas').onclick = changerPas;   // 25 → 50 → 100 m…, avant ou pendant la course (v27)
